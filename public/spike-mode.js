@@ -122,11 +122,14 @@ window.addEventListener('keyup',e=>{if(e.key.toLowerCase()==='f')spikeHeld=false
 window.addEventListener('blur',()=>{spikeHeld=false;spikeTouch=null;});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){spikeHeld=false;spikeTouch=null;}});
 function spikeUI(){
+ document.getElementById('btnSprint').style.display=selectedMode==='spike'?'none':'';
+ if(selectedMode==='spike')mobileSprintHeld=false;
  const active=selectedMode==='spike'&&gameStarted&&!gameEnded&&spikeState;spikePanel.style.display=active?'block':'none';spikeButton.style.display=active&&isMobile?'flex':'none';if(!active)return;
  const s=spikeState,b=s.bomb,attacking=myPlayer.teamId===`team_${s.attackTeam}`;
  document.getElementById('spikeStatus').textContent=`어센트 · ${s.round}라운드 | 청록 ${s.score[0]} : ${s.score[1]} 코랄 | ${attacking?'공격':'수비'} | ${s.phase==='prep'?'준비':s.phase==='planted'?'폭발까지':s.phase==='end'?s.result:'라운드'} ${Math.max(0,Math.ceil(s.time))}초`;
  const prep=s.phase==='prep'&&!myPlayer.isDead;document.getElementById('spikeWeaponBar').style.display=prep?'block':'none';
  let hint=prep?'스폰 지역에서 총기를 바꿀 수 있습니다. 준비 후 출발하세요.':s.phase==='end'?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
+ if(b.planted&&b.defuseCheckpoint>=3.5)hint+=' · 반해체 완료 (50% 저장)';
  if(s.actor&&(b.planted||attacking))hint+=` · ${Math.round(s.progress/(b.planted?7:4)*100)}%`;
  document.getElementById('spikePrompt').textContent=hint;
 }
@@ -154,3 +157,14 @@ const oldFull=renderFullMap;
 renderFullMap=()=>{oldFull();if(selectedMode==='spike')drawSpikeMap(fCtx,fullMapCanvas.width/WORLD_SIZE);};
 const oldReturn=returnToRoomAfterGame;
 returnToRoomAfterGame=()=>{spikeMatch=null;spikeState=null;spikeHeld=false;oldReturn();spikeUI();};
+
+// Hide enemy tracers behind walls, including their previous endpoint and trail.
+function spikeBulletVisible(b){
+ if(selectedMode!=='spike')return true;
+ const viewer=isSpectating&&spectateTarget?spectateTarget:myPlayer;
+ const owner=getCombatEntityById(b.ownerId);
+ if(b.ownerId===viewer?.id||(owner&&viewer&&areAllies(viewer,owner)))return true;
+ if(!viewer)return false;
+ const prev={x:Number.isFinite(b.prevX)?b.prevX:b.x,y:Number.isFinite(b.prevY)?b.prevY:b.y};
+ return hasLineOfSight(viewer,b)&&hasLineOfSight(viewer,prev)&&hasLineOfSight(viewer,{x:(prev.x+b.x)/2,y:(prev.y+b.y)/2});
+}

@@ -78,7 +78,7 @@
    }
    const attackers=this.actors().filter(p=>alive(p)&&this.team(p)===this.attackTeam);
    const carrier=attackers.find(p=>!p.id.startsWith('bot_'))||attackers[0];
-   this.bomb={carrier:carrier?.id||null,x:carrier?.x||250,y:carrier?.y||1200,planted:false,site:null,timer:45};
+   this.bomb={carrier:carrier?.id||null,x:carrier?.x||250,y:carrier?.y||1200,planted:false,site:null,timer:45,defuseCheckpoint:0};
   }
   choose(p,weapon){if(this.phase!=='prep'||!alive(p)||!inside(p,this.spawn(p))||!['ar','sniper','shotgun'].includes(weapon))return false;p.weapon=weapon;p.clipAmmo={ar:30,sniper:5,shotgun:8}[weapon];p.reserveAmmo=p.clipAmmo*4;p.isReloading=false;return true;}
   finish(team,reason){if(!['live','planted'].includes(this.phase))return;this.score[team-1]++;this.phase='end';this.time=6;this.result=reason;this.progress=0;this.actor=null;for(const p of this.actors()){p.isShooting=false;p._spikeUse=false;}}
@@ -99,13 +99,14 @@
    const eligible=p=>alive(p)&&p._spikeUse&&!p.isShooting&&!p.isMoving&&(b.planted?this.team(p)!==this.attackTeam&&Math.hypot(p.x-b.x,p.y-b.y)<85:b.carrier===p.id&&SITES.some(s=>Math.hypot(p.x-s.x,p.y-s.y)<s.r));
    const user=players.find(p=>p.id===this.actor&&eligible(p))||players.find(eligible);
    if(user){
-    if(this.actor!==user.id||!this.anchor||Math.hypot(user.x-this.anchor.x,user.y-this.anchor.y)>3){this.actor=user.id;this.progress=0;this.anchor={x:user.x,y:user.y};}
+    if(this.actor!==user.id||!this.anchor||Math.hypot(user.x-this.anchor.x,user.y-this.anchor.y)>3){this.actor=user.id;this.progress=b.planted?(b.defuseCheckpoint||0):0;this.anchor={x:user.x,y:user.y};}
     this.progress+=dt;
+    if(b.planted&&this.progress>=3.5)b.defuseCheckpoint=3.5;
     if(this.progress>=(b.planted?7:4)){
      if(b.planted){this.finish(this.team(user),'스파이크 해체 · 수비 승리');return;}
      b.planted=true;b.carrier=null;b.x=user.x;b.y=user.y;b.site=SITES.find(s=>Math.hypot(user.x-s.x,user.y-s.y)<s.r).name;b.timer=45;this.phase='planted';this.time=45;this.actor=null;this.progress=0;
     }
-   }else{this.actor=null;this.progress=0;this.anchor=null;}
+   }else{this.actor=null;this.progress=b.planted?(b.defuseCheckpoint||0):0;this.anchor=null;}
    const attackers=players.filter(p=>alive(p)&&this.team(p)===this.attackTeam),defenders=players.filter(p=>alive(p)&&this.team(p)!==this.attackTeam);
    if(b.planted){b.timer=this.time;if(this.time<=0)this.finish(this.attackTeam,'스파이크 폭발 · 공격 승리');else if(!defenders.length)this.finish(this.attackTeam,'수비팀 전멸 · 공격 승리');}
    else if(!attackers.length)this.finish(3-this.attackTeam,'공격팀 전멸 · 수비 승리');

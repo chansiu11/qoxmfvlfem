@@ -81,11 +81,25 @@ test('actual player and bot movement is halved only in general mode',()=>{
  for(const stance of ['walk','sprint','stealth']){
   h.run(`keys['shift']=${stance==='sprint'};keys['control']=${stance==='stealth'};`);
   const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';myPlayer.x=1200;myPlayer.y=1200;originalUpdate();myPlayer.x-1200`));
-  assert(distances[0]>0);assert.equal(distances[1],distances[0]/2);
+  assert(distances[0]>0);assert.equal(distances[1],stance==='sprint'?1.5:distances[0]/2);
  }
  const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';globalThis.testbot={id:'bot_test',x:1200,y:1200};walkBotRoute(testbot,{x:1300,y:1200},3);testbot.x-1200`));assert.equal(distances[1],distances[0]/2);assert(distances[1]>0);
 });
 test('actual bot pathfinder reaches both Ascent sites from both spawns',()=>{
  const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='1';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();`);
  for(let spawn=0;spawn<2;spawn++)for(let site=0;site<2;site++)assert(h.run(`(()=>{const r=SpikeRules.SPAWNS[${spawn}];return !!planBotRoute({x:r.x+40,y:r.y+40},SpikeRules.SITES[${site}])})()`),`spawn ${spawn} to site ${site}`);
+});
+test('half defuse survives release, movement and teammate handoff, then resets next round',()=>{
+ const {p,m}=live();Object.assign(p[0],{x:SITES[0].x,y:SITES[0].y,_spikeUse:true});tick(m,4.1);
+ Object.assign(p[1],{x:m.bomb.x,y:m.bomb.y,_spikeUse:true});tick(m,3);p[1]._spikeUse=false;m.tick(.05);assert.equal(m.progress,0);
+ p[1]._spikeUse=true;tick(m,3.6);assert.equal(m.bomb.defuseCheckpoint,3.5);
+ p[1].isMoving=true;m.tick(.05);assert.equal(m.progress,3.5);
+ const c={id:'c',teamId:'team_2',hp:200,x:m.bomb.x,y:m.bomb.y,_spikeUse:true};p.push(c);tick(m,3.3);assert.equal(m.phase,'planted');tick(m,.3);assert.equal(m.phase,'end');tick(m,6.1);assert.equal(m.bomb.defuseCheckpoint,0);
+});
+test('enemy bullet visibility follows wall occlusion and spectated viewpoint only in general mode',()=>{
+ const h=harness();h.run(`selectedMode='spike';myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.x=0;myPlayer.y=0;remotePlayers.enemy={id:'enemy',teamId:'team_2'};globalThis.tracer={ownerId:'enemy',x:200,y:0,prevX:180,prevY:0};hasLineOfSight=(a,b)=>a.x>100||b.x<100;`);
+ assert.equal(h.run('spikeBulletVisible(tracer)'),false);assert.equal(h.run(`spikeBulletVisible({...tracer,x:50,prevX:40})`),true);
+ assert.equal(h.run(`spikeBulletVisible({...tracer,ownerId:'me'})`),true);
+ h.run(`isSpectating=true;spectateTarget={id:'ally',teamId:'team_1',x:150,y:0}`);assert.equal(h.run('spikeBulletVisible(tracer)'),true);
+ h.run(`isSpectating=false;selectedMode='normal'`);assert.equal(h.run('spikeBulletVisible(tracer)'),true);
 });
