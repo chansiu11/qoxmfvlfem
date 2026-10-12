@@ -1,19 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Room} from '../game.js';
-import {visible,pathTo,blocked,SITES} from '../public/shared.js';
-function match(){const r=new Room({bots:false});const a=r.add('a','Alpha'),b=r.add('b','Bravo');r.start('a');r.phase='live';r.time=100;return{r,a,b};}
-function tick(r,seconds){for(let t=0;t<seconds;t+=1/30)r.tick(1/30);}
-test('solo private room starts with opponent bot; non-host cannot start',()=>{const r=new Room();r.add('a','A');assert.equal(r.start('intruder'),false);assert.equal(r.start('a'),true);assert.equal(r.players.size,2);assert.equal(r.phase,'buy');});
-test('buy validates funds and phase; deaths remove primary and reward killer',()=>{const {r,a,b}=match();a.money=5000;assert.equal(r.buy(a,'rifle'),false);r.phase='buy';assert(r.buy(a,'rifle'));assert.equal(a.money,2100);assert(r.buy(a,'armor'));assert.equal(a.armor,50);assert.equal(r.buy(a,'sniper'),false);r.phase='live';r.damage(a,1000,b);assert.equal(a.alive,false);assert.equal(a.primary,null);assert.equal(b.kills,1);assert.equal(b.money,1000);});
-test('hitscan blocked by wall; unobstructed enemy can be hit',()=>{const {r,a,b}=match();a.x=230;a.y=100;b.x=365;b.y=100;a.angle=0;a.weapon='sniper';a.ammo.sniper=5;a.reserve.sniper=15;r.fire(a);assert.equal(b.hp,100);a.cooldown=0;a.x=100;a.y=400;b.x=200;b.y=400;r.fire(a);assert.equal(b.alive,false);assert.equal(r.bomb.carrier,a.id);});
-test('hidden opponents are not sent through walls or smoke',()=>{const {r,a,b}=match();a.x=230;a.y=100;b.x=365;b.y=100;assert(!r.snapshot('a').players.some(p=>p.id==='b'));a.x=100;a.y=400;b.x=200;b.y=400;assert(r.snapshot('a').players.some(p=>p.id==='b'));r.smokes=[{x:150,y:400,r:40,time:10}];assert(!r.snapshot('a').players.some(p=>p.id==='b'));});
-test('plant requires holding still; defuse wins round after seven seconds',()=>{const {r,a,b}=match();Object.assign(a,{x:SITES[0].x,y:SITES[0].y});a.input={interact:true};tick(r,1);assert(a.interact>.9);a.input={x:1,interact:true};r.tick(.03);assert.equal(a.interact,0);a.input={interact:true};tick(r,3.1);assert.equal(r.bomb.planted,true);b.x=r.bomb.x;b.y=r.bomb.y;b.input={interact:true};tick(r,7.1);assert.equal(r.phase,'end');assert.equal(r.score[b.team],1);});
-test('planted bomb survives attacker elimination, then explodes',()=>{const {r,a,b}=match();r.bomb={planted:true,x:1150,y:135,carrier:null,timer:2};r.kill(a,b);r.tick(.1);assert.equal(r.phase,'live');tick(r,2);assert.equal(r.score[r.attack],1);});
-test('dropped core is picked up only by an attacker; disconnect transfers host',()=>{const {r,a,b}=match();r.dropBomb(a);b.x=a.x;b.y=a.y;r.tick(.03);assert.equal(r.bomb.carrier,a.id);r.remove(a.id);assert.equal(r.bomb.carrier,null);assert.equal(r.host,'b');});
-test('reload, reserve ammo and buying prototype keys are validated',()=>{const {r,a}=match();a.ammo.pistol=0;r.reload(a);assert(a.reloading>0);tick(r,1.3);assert.equal(a.ammo.pistol,12);assert.equal(a.reserve.pistol,36);assert.equal(a.agent,'breacher');assert.equal(a.skill,undefined);assert.equal(r.ability,undefined);r.phase='buy';assert.equal(r.buy(a,'constructor'),false);assert(Number.isFinite(a.money));});
-test('halftime resets economy; overtime alternates sides and requires two-point lead',()=>{const {r,a}=match();r.round=12;r.newRound();assert.equal(r.attack,1);assert.equal(a.money,800);r.round=24;r.score=[12,12];r.newRound();assert.equal(r.attack,0);assert.equal(a.money,5000);r.phase='live';r.finish(0,'win');assert.equal(r.phase,'end');r.newRound();assert.equal(r.attack,1);r.phase='live';r.finish(0,'win');assert.equal(r.phase,'match');});
-test('bot route connects spawn to both sites without crossing walls',()=>{for(const site of SITES){const route=pathTo({x:140,y:600},site);assert(route.length>10);assert(route.every(p=>!blocked(p.x,p.y,19)));assert(Math.hypot(route.at(-1).x-site.x,route.at(-1).y-site.y)<60);}});
-test('full autonomous rounds complete and restart without getting stuck',()=>{const r=new Room();r.addBot(0);r.addBot(1);r.newRound();tick(r,260);assert(r.round>=2);for(const p of r.players.values())assert(Number.isFinite(p.x)&&Number.isFinite(p.money));});
-
-test('all requested agents and bots use one fixed character',()=>{const r=new Room();for(const id of ['ghost','rush','medic','invalid'])assert.equal(r.add(id,id,id).agent,'breacher');assert.equal(r.addBot(1).agent,'breacher');});
+import {createSimulation} from '../simulation.js';
+test('dedicated simulation generates the current map, runs bots and excludes server sentinel',async()=>{
+ const s=createSimulation(),packets=[];
+ try{s.add('a','A',p=>packets.push(p),()=>0);s.settings({mode:'normal',aiCount:3,aiDiff:'hard'});s.start();s.tick();s.sync();
+ assert.equal(s.state().bots,3);assert(s.state().seed>0);assert.equal(s.state().players.length,1);
+ const initial=s.evaluate('aiBots.map(b=>({x:b.x,y:b.y}))');
+ await new Promise(r=>setTimeout(r,40));s.tick();
+ const after=s.evaluate('aiBots.map(b=>({x:b.x,y:b.y}))');assert.notDeepEqual(initial,after);
+ assert(packets.find(p=>p.type==='START'));assert(!packets.find(p=>p.type==='START').mapData);
+ assert(packets.filter(p=>p.type==='SYNC').every(p=>!p.players.some(p=>p.id==='__server__')));
+ }finally{s.dispose();}
+});
+test('server resolves bullet hits, rate limits shots, rejects spoofed identity and preserves damage',()=>{
+ const s=createSimulation();try{
+ s.add('a','A',()=>{},()=>0);s.add('b','B',()=>{},()=>0);s.settings({mode:'normal',aiToggle:false});s.start();
+ s.evaluate('obstacles=[];');
+ s.receive('a',{type:'SYNC',player:{id:'b',x:100,y:100,weapon:'sniper',clipAmmo:5,angle:0}});
+ s.receive('b',{type:'SYNC',player:{x:220,y:100,hp:200}});
+ s.receive('a',{type:'SHOOT',player:{angle:0}});s.receive('a',{type:'SHOOT',player:{angle:0}});
+ assert.equal(s.evaluate('bullets.length'),1);s.tick();
+ assert.equal(s.state().players.find(p=>p.id==='b').hp,100);
+ s.receive('b',{type:'SYNC',player:{hp:200}});assert.equal(s.state().players.find(p=>p.id==='b').hp,100);
+ assert.equal(s.state().players.find(p=>p.id==='a').name,'A');
+ }finally{s.dispose();}
+});
+test('slow connections skip obsolete snapshots; server keeps running without original owner',()=>{
+ const s=createSimulation(),packets=[];try{
+ s.add('a','A',()=>{},()=>0);s.add('b','B',p=>packets.push(p),()=>65536);s.settings({mode:'normal',aiCount:2});s.start();s.remove('a');s.tick();s.sync();
+ assert.equal(s.state().started,true);assert.equal(s.state().bots,2);assert.equal(s.state().players[0].id,'b');assert(!packets.some(p=>p.type==='SYNC'));
+ }finally{s.dispose();}
+});
+test('incremental path search finishes around a wall without crossing collision geometry',()=>{
+ const s=createSimulation();try{
+ const result=s.evaluate(`(()=>{obstacles=[{x:160,y:50,w:40,h:200,type:'rock'}];const search=planBotRoute({x:100,y:100},{x:260,y:100});let step,iterations=0;do{step=search.next();iterations++;}while(!step.done&&iterations<1000);let prev={x:100,y:100};const safe=Array.isArray(step.value)&&step.value.every(p=>{const ok=botSegmentClear(prev,p);prev=p;return ok;});return {done:step.done,yields:iterations,safe};})()`);
+ assert(result.done);assert(result.yields>1);assert(result.safe);
+ }finally{s.dispose();}
+});

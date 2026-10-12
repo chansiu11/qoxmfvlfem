@@ -1,10 +1,8 @@
-[게임 바로 실행](https://breach-qoxmfvlfem.onrender.com)
+# 2D 배틀필드 로얄 — dedicated Render server
 
-# BREACH — 2D Tactical Shooter
+The current Battle Royale / Deathmatch game now connects to a dedicated WebSocket server. Room ownership controls lobby settings and start permission only. Maps, bots, projectiles, damage, doors, zone progression and match results continue on the server when the owner leaves, while at least one player remains.
 
-PC/모바일 웹 브라우저에서 즐기는 서버 권한형 온라인 탑다운 전술 슈터입니다. 게임 화면과 WebSocket 서버를 하나의 Render Node 서비스에서 제공합니다.
-
-## 실행
+## Run
 
 ```sh
 npm ci
@@ -12,34 +10,31 @@ npm test
 npm start
 ```
 
-`http://localhost:3000` 접속. 서버 포트는 `PORT` 환경변수를 따릅니다. 외부 DB/계정/API 키는 필요하지 않습니다.
+Open http://localhost:3000. Render uses `PORT`, `npm ci`, `npm start`, and `/health`. The health response includes `version: dedicated-v2`. `render.yaml` specifies Singapore and **manual deployment** (`autoDeployTrigger: off`). Existing Render settings must also be checked; committing this file alone does not change an existing manually-created service.
 
-## 시스템
+## Architecture and latency
 
-- 사설방: 6자리 코드 공유, 팀 선택, 방장 시작, 봇 추가/제거.
-- 랜덤 매치: 대기 중인 공개 방에 합류하고 8초 후 자동 시작. 진행 중인 매치에는 새 랜덤 참가자를 넣지 않습니다.
-- 고정 5대5 조건 없음. 1인 시작 시 빈 팀을 봇이 채웁니다. 방당 사람 최대 20명, 서버 접속 최대 200명은 과부하 방지용 안전 상한이며 실제 수용 성능을 보장하지 않습니다.
-- 공격/수비, A/B 거점, 구매 20초, 전투 100초, 설치 3초, 해체 7초, 폭발 40초.
-- 13선승·2점차 승리, 12라운드 후 공수 교대. 12:12 연장에서는 매 라운드 교대/5000 크레딧.
-- 권총/기관단총/소총/저격총/산탄총/방어구, 크레딧 경제, 생존 장비 유지, 처치 및 설치 보상, 연패 보상.
-- 캐릭터는 브리처 한 종류이며 특수 스킬은 없습니다.
-- 서버 이동·충돌·사격·탄약·구매 검증. 벽 뒤 적 위치는 클라이언트에 전송하지 않습니다.
-- 사망 시 아군 관전, 기록표, 미니맵, 핑, 처치 피드.
-- 모바일 멀티터치: 왼쪽 이동, 오른쪽 조준/사격. 가로 화면 권장.
+- `public/game-core.js`: readable source extracted from the previous gzip/base64 game, retaining its map generation, combat, bots and rendering.
+- `simulation.js` / `scripts/server-bridge.js`: room-local Node VM with a minimal UI adapter; no browser, canvas rendering or PeerJS on the server. This executes only trusted repository code, not user scripts.
+- `room-worker.js`: dedicated worker thread per room, target 60 Hz simulation, 30 Hz snapshots. Physics uses bounded catch-up; overload can still slow the simulation.
+- `server.js`: HTTP and WebSocket gateway. Ping replies bypass simulation workers. Nagle/compression are disabled; stale state snapshots are dropped above 32 KB queued data.
+- `public/server-transport.js`: every device, including the room owner, is a server client. GitHub Pages points to `wss://breach-qoxmfvlfem.onrender.com/ws`; Render-hosted clients use the same origin.
+- Nearby bot state targets 15 Hz, full bot repair 1.2 seconds, full item/door repair 4 seconds. Item changes use small events instead of sending the entire inventory list for every pickup. Map transfer uses a deterministic seed.
+- A* navigation resumes across updates instead of blocking a complete frame; collision checks continue to use the existing wall geometry.
+- Ping displays measured round-trip time with `performance.now()`; no artificial cap or division. **100 ms is a goal, not a guarantee.** Actual RTT depends on the player's route, server region, load and network. No Korea-to-Render measurement has been made by these tests.
 
-## 조작
+Player movement and inventory selection retain the previous client-side behavior for responsiveness. This migration moves world simulation to the server; it is not a complete input-only anti-cheat rewrite. Client snapshots cannot spoof player identity, kill/death counts, teams, or undo locked server damage; shot cooldowns are checked server-side.
 
-WASD 이동, 마우스 조준/사격, Shift 걷기, R 재장전, E 설치/해체(유지), G 코어 내려놓기, 1/2 무기 전환, B 구매, Tab 기록표.
+## Controls
 
-## Render 배포 설정
+Desktop controls are preserved. On mobile, the right touch area **only aims**. The new **발사** button fires while held, independently of the aiming finger; release, touch cancellation, backgrounding or loss of focus stops fire. The fire button participates in the existing mobile key layout editor.
 
-- GitHub 저장소: `https://github.com/chansiu11/qoxmfvlfem`
-- Runtime: Node / Branch: main
-- Build: `npm ci` / Start: `npm start`
-- Region: Singapore / Plan: Free
-- Health path: `/health`
-- 외부 패키지: `ws` (고정 버전 및 lockfile)
+## Deployment order
 
-Render에서 배포된 HTTPS 주소 하나를 모두가 사용하면 같은 서버에서 만납니다. GitHub Pages만으로는 서버를 실행할 수 없습니다. 무료 플랜은 유휴 시 절전되어 첫 접속이 느릴 수 있습니다. 매치/크레딧/방은 메모리에만 저장되며 서버 재배포·재시작 시 종료됩니다. 끊긴 접속의 기존 경기 상태를 복구하지 않으며 사설방 코드로 다시 입장하면 다음 라운드부터 참여합니다. 여러 인스턴스 확장이나 영구 랭킹 저장은 포함하지 않습니다.
+Deploy matching frontend and server together. Do not merge the new GitHub Pages client before the dedicated server has been deployed and its health endpoint reports `dedicated-v2`.
 
-독자적인 이름과 도형 그래픽을 사용합니다. 특정 상용 게임의 캐릭터·맵·로고·음원을 사용하지 않습니다.
+Rooms, matches and items are in memory. Empty rooms are deleted; restarts/redeploys end matches. Owner departure transfers lobby controls, not simulation. This version requires rejoining from the lobby after a connection closes; mid-match reconnect is not implemented. Capacity guardrails are 4 rooms, 20 players per room and 200 sockets, not a guaranteed capacity estimate. Up to 100 BR bots are preserved, but they can exceed the frame budget on limited CPUs.
+
+## Verification
+
+`npm test` checks real WebSocket room joining, owner authorization/transfer, continued snapshots after owner exit, movement propagation, ping, cleanup, bot/map simulation, projectile damage, shot rate limiting, slow-client snapshot drops, and independent mobile aim/fire touch handlers. Browser visual testing and real-device RTT should be done after deployment.

@@ -1,0 +1,5804 @@
+
+let WORLD_SIZE = 12000; // 배틀로얄 맵 확장을 위해 기존 8000에서 12000으로 증대
+
+const SCOPES = {
+    '1x': { name: "1배율 (레드닷)", viewOffset: 400 },
+    '2x': { name: "2배율", viewOffset: 750 },
+    '3x': { name: "3배율", viewOffset: 1150 },
+    '4x': { name: "4배율", viewOffset: 1600 },
+    '8x': { name: "8배율", viewOffset: 2400 }
+};
+
+const ARMORS = {
+    'helmet_1': { name: "1레벨 머리갑바", type: "helmet", reduction: 0.15 },
+    'helmet_2': { name: "2레벨 머리갑바", type: "helmet", reduction: 0.30 },
+    'helmet_3': { name: "3레벨 머리갑바", type: "helmet", reduction: 0.50 },
+    'body_1': { name: "1레벨 몸갑바", type: "body", reduction: 0.15 },
+    'body_2': { name: "2레벨 몸갑바", type: "body", reduction: 0.30 },
+    'body_3': { name: "3레벨 몸갑바", type: "body", reduction: 0.50 }
+};
+
+const WEAPONS = {
+    ar: { name: "돌격소총", cooldown: 110, bulletSpeed: 90, damage: 25, pellets: 1, spread: 0.03, maxClip: 30 },
+    sniper: { name: "스나이퍼", cooldown: 900, bulletSpeed: 160, damage: 100, pellets: 1, spread: 0.005, maxClip: 5 },
+    shotgun: { name: "샷건", cooldown: 800, bulletSpeed: 75, damage: 18, pellets: 8, spread: 0.18, maxClip: 8 }
+};
+
+const AI_DIFFICULTY = {
+    very_easy: { delay: 3500, spread: 0.5, speedMult: 0.8, turnMult: 0.65 },
+    easy: { delay: 900, spread: 0.15, speedMult: 0.95, turnMult: 1.0 },
+    hard: { delay: 300, spread: 0.08, speedMult: 1.1, turnMult: 1.6 }
+};
+// AI는 약 30Hz로 갱신되므로 플레이어(매 프레임 이동)보다 느려지지 않도록 이동량을 보정한다.
+const BOT_MOVEMENT_SCALE = 2.0;
+
+let peer = null;
+let connections = {};
+let hostConn = null;
+let isHost = false;
+let selectedMode = 'br';
+let isMobile = false;
+let aiDifficulty = 'very_easy';
+
+// --- 네트워크 안정화 설정 ---
+// 기존 코드는 매 렌더 프레임마다 전체 월드 상태를 전송해 WebRTC DataChannel 버퍼가
+// 계속 쌓일 수 있었다. 게임 화면은 60fps로 그리되 네트워크 동기화만 별도 주기로 제한한다.
+const NET_HOST_SYNC_MS = 1000 / 30;      // 서버 -> 참가자: 30Hz
+const NET_CLIENT_SYNC_MS = 1000 / 30;    // 참가자 -> 서버: 30Hz
+const NET_BOT_SYNC_MS = 1000 / 15;        // 가까운 AI는 15Hz로 전송하고 화면에서는 보간
+const NET_BOT_FULL_SYNC_MS = 1200;       // 먼 AI는 1.2초마다 전체 보정만 수행
+const NET_BOT_INTEREST_RADIUS = 4200;    // 참가자 주변 AI만 빠른 동기화 대상으로 사용
+const NET_BOT_INTERPOLATE_RADIUS = 5000; // 화면 근처 AI만 매 프레임 보간해 CPU 사용량 절감
+const NET_BOT_SMOOTH_MS = 45;            // 빠르게 따라가되 좌표 스냅은 피한다
+const NET_BOT_PREDICT_MS = 70;            // 패킷 사이 이동량을 이용해 약간 앞을 예측해 끊김을 숨김
+const NET_PLAYER_SMOOTH_MS = 35;         // 다른 사람 이동은 봇보다 더 빠르게 보간
+const NET_PLAYER_PREDICT_MS = 45;        // 다른 사람 입력 패킷 사이를 짧게 예측
+const NET_PLAYER_SNAP_DISTANCE = 900;    // 부활/텔레포트만 즉시 반영
+const NET_BOT_SNAP_DISTANCE = 650;       // 부활/강제 이동처럼 큰 좌표 변화는 즉시 반영
+const NET_FULL_STATE_MS = 4000;          // 아이템/문 전체 복구 동기화는 드물게만 수행
+const NET_HEARTBEAT_MS = 3000;           // 참가자 -> 방장 연결 확인
+const NET_HEARTBEAT_TIMEOUT_MS = 10000;  // 이 시간 동안 응답이 없으면 재접속
+const NET_MAX_BUFFERED_BYTES = 32 * 1024;
+const NET_MAX_QUEUED_MESSAGES = 1;
+const NET_RECONNECT_GRACE_MS = 12000;
+let lastHostSyncAt = 0;
+let lastClientSyncAt = 0;
+let lastBotSyncAt = 0;
+let lastFullBotSyncAt = 0;
+let lastBotInterpolationAt = performance.now();
+let lastPlayerInterpolationAt = performance.now();
+let lastFullStateAt = 0;
+let lastGuestHudAt = 0;
+const guestBotById = new Map();
+let currentRoomCode = '';
+let joinTargetPeerId = '';
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let guestConnecting = false;
+let guestConnectTimeout = null;
+let guestHeartbeatTimer = null;
+let lastHostMessageAt = 0;
+const pendingDisconnectRemoval = new Map();
+
+let gameStarted = false;
+let gameEnded = false;
+let initialPlayerCount = 1;
+
+let teamMaxSize=2;
+let teamAssignments={};
+let initialTeamCount=0;
+let winningTeam=null;
+const matchHumans=new Map();
+const matchTeamRanks=new Map();
+let spectatorIds = new Set();
+let roomRoster = [];
+let isSpectating = false;
+let spectateTarget = null;
+let isRespawning = false;
+let respawnTimerVal = 5;
+let respawnInterval = null;
+
+// 스폰 선택 및 자기장 단계 관리
+let isSpawnSelecting = false;
+let hasSelectedSpawn = false;
+let spawnTimerVal = 10;
+let spawnTimerInterval = null;
+
+let zoneStage = 1;
+let maxZoneStages = 5;
+let zoneTimer = 60;
+let isZoneShrinking = false;
+let zoneTimerInterval = null;
+let targetZone = { x: WORLD_SIZE / 2, y: WORLD_SIZE / 2, radius: WORLD_SIZE * 0.7 };
+const zone = {
+    x: WORLD_SIZE / 2,
+    y: WORLD_SIZE / 2,
+    radius: WORLD_SIZE * 0.7,
+    shrinkRate: 3.0
+};
+
+// 데스매치 총기 선택 관리
+let weaponSelectTimerVal = 10;
+let weaponSelectInterval = null;
+
+// 연속 킬 관련 변수
+let killStreakCount = 0;
+let killStreakTimer = null;
+
+const gameFrame = document.getElementById('gameFrame');
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const minimapCanvas = document.getElementById('minimapCanvas');
+const mCtx = minimapCanvas.getContext('2d');
+const fullMapCanvas = document.getElementById('fullMapCanvas');
+const fCtx = fullMapCanvas.getContext('2d');
+
+function resizeCanvas() {
+    canvas.width = gameFrame.clientWidth;
+    canvas.height = gameFrame.clientHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+let obstacles = [];
+let droppedItems = [];
+
+const myPlayer = {
+    id: Math.random().toString(36).substring(2, 9),
+    x: 1000,
+    y: 1000,
+    angle: 0, speed: 3.0, hp: 200, maxHp: 200,
+    kills: 0, deaths: 0, isDead: false,
+    name: '플레이어', weapon: null,
+    clipAmmo: 0, reserveAmmo: 0, isReloading: false,
+    equippedScope: null,
+    equippedHelmet: null,
+    equippedBodyArmor: null,
+    inventory: { scopes: [], armors: [], healing: {bandage:0,medkit:0} },
+    isAiming: false, isShooting: false, lastShootTime: 0,
+    isMoving: false, movementMode: 'walk'
+};
+
+let remotePlayers = {};
+
+const camera = { x: myPlayer.x, y: myPlayer.y };
+const keys = {};
+const mouse = { x: 0, y: 0 };
+let mobileMoveVec = { x: 0, y: 0 };
+let mobileAimVec = { x: 0, y: 0 };
+let mobileSprintHeld = false;
+
+let bullets = [];
+const aiBots = [];
+const gunshotEvents = [];
+const footstepEvents=[];
+const footstepTracks=new Map();
+let footstepSequence=0,footstepCheckAt=0,stepAudio=null,lastStepAudioAt=0;
+document.addEventListener('pointerdown',()=>{
+    const Audio=window.AudioContext||window.webkitAudioContext;
+    if(Audio && !stepAudio)stepAudio=new Audio();
+    if(stepAudio?.state==='suspended')stepAudio.resume().catch(()=>{});
+},{passive:true});
+
+function playNearbyStep(distance,range){
+    if(!stepAudio || stepAudio.state!=='running' || performance.now()-lastStepAudioAt<120)return;
+    lastStepAudioAt=performance.now();
+    const oscillator=stepAudio.createOscillator(),gain=stepAudio.createGain(),t=stepAudio.currentTime;
+    oscillator.type='triangle';oscillator.frequency.setValueAtTime(110,t);oscillator.frequency.exponentialRampToValueAtTime(45,t+.07);
+    gain.gain.setValueAtTime(Math.max(.001,.045*(1-distance/range)),t);gain.gain.exponentialRampToValueAtTime(.001,t+.08);
+    oscillator.connect(gain);gain.connect(stepAudio.destination);oscillator.start(t);oscillator.stop(t+.09);
+    oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();};
+}
+function footstepRange(entity){return entity.movementMode==='stealth'?70:entity.movementMode==='sprint'?320:220;}
+function updateFootsteps(){
+    const now=Date.now();if(now-footstepCheckAt<80)return;footstepCheckAt=now;
+    while(footstepEvents.length && now-footstepEvents[0].time>850)footstepEvents.shift();
+    const alive=new Set();
+    const listener=isSpectating?spectateTarget:myPlayer;
+    for(const p of [myPlayer,...Object.values(remotePlayers),...aiBots]){
+        if(p.isDead||p.hp<=0||isAssignedSpectator(p.id))continue;
+        if(!isHost && listener && p!==listener){
+            const fx=p.x-listener.x,fy=p.y-listener.y;
+            if(fx*fx+fy*fy>700*700) continue;
+        }
+        alive.add(p.id);let track=footstepTracks.get(p.id);
+        if(!track){footstepTracks.set(p.id,{x:p.x,y:p.y,distance:0,at:now});continue;}
+        const moved=Math.hypot(p.x-track.x,p.y-track.y);track.x=p.x;track.y=p.y;
+        if(moved>100){track.distance=0;continue;}
+        if(moved<.2){track.distance=0;continue;}
+        track.distance+=moved;
+        if(track.distance<20 || now-track.at<260)continue;
+        track.distance=0;track.at=now;
+        const event={id:++footstepSequence,entityId:p.id,x:p.x,y:p.y,range:footstepRange(p),time:now};
+        footstepEvents.push(event);
+        if(listener && !areAllies(listener,p)){const distance=Math.hypot(listener.x-p.x,listener.y-p.y);if(distance<event.range)playNearbyStep(distance,event.range);}
+    }
+    for(const id of footstepTracks.keys())if(!alive.has(id))footstepTracks.delete(id);
+}
+function listenForBotFootsteps(bot,brain,now){
+    if(now-brain.lastSeenAt<900 || (bot.investigateTarget && now-bot.investigateTarget.time<700))return;
+    for(let i=footstepEvents.length-1;i>=0;i--){
+        const event=footstepEvents[i];if(event.id<=(brain.lastFootstepId||0)||now-event.time>850||event.entityId===bot.id)continue;
+        const owner=getCombatEntityById(event.entityId);if(owner&&areAllies(bot,owner))continue;
+        if(Math.hypot(bot.x-event.x,bot.y-event.y)>event.range)continue;
+        brain.lastFootstepId=event.id;
+        bot.investigateTarget={x:event.x,y:event.y,time:now};return;
+    }
+}
+function drawFootstepIndicators(){
+    const listener=isSpectating?spectateTarget:myPlayer;
+    if(!listener||listener.isDead)return;
+    const now=Date.now(),seen=new Set();
+    for(let i=footstepEvents.length-1;i>=0;i--){
+        const event=footstepEvents[i];if(seen.has(event.entityId)||event.entityId===listener.id||now-event.time>850)continue;
+        seen.add(event.entityId);
+        const owner=getCombatEntityById(event.entityId);
+        if(owner && areAllies(listener,owner))continue;
+        if(Math.hypot(listener.x-event.x,listener.y-event.y)>event.range)continue;
+        const angle=Math.atan2(event.y-listener.y,event.x-listener.x);
+        ctx.save();ctx.translate(listener.x,listener.y);ctx.rotate(angle);
+        ctx.globalAlpha=Math.max(0,1-(now-event.time)/850);ctx.fillStyle='#ff9a32';
+        ctx.beginPath();ctx.moveTo(86,0);ctx.lineTo(73,-7);ctx.lineTo(77,0);ctx.lineTo(73,7);ctx.closePath();ctx.fill();ctx.restore();
+    }
+}
+const bloodParticles = [];
+
+let isEditingKeys = false;
+let mobileControlsInitialized = false;
+let platformSwitching = false;
+
+function syncSettingsPlatformUI() {
+    const modalSelect = document.getElementById('settingsPlatformSelect');
+    const startSelect = document.getElementById('platformSelect');
+    const mobileGroup = document.getElementById('mobileSettingsGroup');
+    if (modalSelect) modalSelect.value = isMobile ? 'mobile' : 'pc';
+    if (startSelect) startSelect.value = isMobile ? 'mobile' : 'pc';
+    if (mobileGroup) mobileGroup.style.display = isMobile ? 'block' : 'none';
+}
+
+function applyPlatformSetting(value) {
+    if (platformSwitching) return;
+    platformSwitching = true;
+    try {
+        const nextIsMobile = value === 'mobile';
+        const changed = isMobile !== nextIsMobile;
+        isMobile = nextIsMobile;
+
+        // 전환 중 눌린 입력이 남아 게임이 멈춘 것처럼 보이지 않도록 모두 초기화한다.
+        mobileSprintHeld = false;
+        mobileMoveVec = {x:0,y:0};
+        mobileAimVec = {x:0,y:0};
+        myPlayer.isShooting = false;
+        myPlayer.isAiming = false;
+        Object.keys(keys).forEach(k => keys[k] = false);
+
+        const controls = document.getElementById('mobileControls');
+        const sprintBtn = document.getElementById('btnSprint');
+        const joy = document.getElementById('joystickContainer');
+        const aim = document.getElementById('aimPadContainer');
+        if (sprintBtn) sprintBtn.classList.remove('active');
+        if (joy) joy.style.display = 'none';
+        if (aim) aim.style.display = 'none';
+
+        // PC로 시작한 게임에서도 플레이 중 모바일로 바꾸면 터치 리스너를 한 번만 생성한다.
+        if (isMobile && !mobileControlsInitialized) initMobileControls();
+
+        if (isEditingKeys) {
+            isEditingKeys = false;
+            const editBtn = document.getElementById('editKeysBtn');
+            if (editBtn) editBtn.innerText = '🖐️ 모바일 키 위치 drag 배치 수정';
+            if (controls) controls.classList.remove('edit-active');
+            disableKeyDrag();
+        }
+
+        if (controls) {
+            controls.style.display = (gameStarted && isMobile && !isRespawning && !isSpectating) ? 'block' : 'none';
+        }
+        syncSettingsPlatformUI();
+
+        // canvas 크기 변경은 현재 프레임이 끝난 뒤 한 번만 수행한다.
+        if (changed) requestAnimationFrame(() => {
+            resizeCanvas();
+            // 벽 뒤 그림자 캐시를 더 이상 생성하지 않는다.
+        });
+    } finally {
+        platformSwitching = false;
+    }
+}
+
+function openSettings() {
+    syncSettingsPlatformUI();
+    document.getElementById('settingsModal').style.display = 'flex';
+}
+
+function closeSettings() {
+    document.getElementById('settingsModal').style.display = 'none';
+
+    // 설정을 닫으면 모바일 키 편집용 임시 UI가 남지 않도록 강제 정리.
+    if (isEditingKeys) {
+        isEditingKeys = false;
+        const btn = document.getElementById('editKeysBtn');
+        if (btn) btn.innerText = '🖐️ 모바일 키 위치 drag 배치 수정';
+        const controls = document.getElementById('mobileControls');
+        if (controls) controls.classList.remove('edit-active');
+        disableKeyDrag();
+    }
+    const controls = document.getElementById('mobileControls');
+    if (controls) controls.style.display = (gameStarted && isMobile && !isRespawning && !isSpectating) ? 'block' : 'none';
+}
+
+function updateControlScale(val) {
+    const controls = document.getElementById('mobileControls');
+    controls.style.transform = `scale(${val})`;
+    controls.style.transformOrigin = 'bottom right';
+}
+
+function toggleEditMobileKeys() {
+    isEditingKeys = !isEditingKeys;
+    const btn = document.getElementById('editKeysBtn');
+    const mobileControls = document.getElementById('mobileControls');
+
+    if (isEditingKeys) {
+        btn.innerText = "💾 배치 저장 완료";
+        mobileControls.style.display = 'block';
+        mobileControls.classList.add('edit-active');
+        enableKeyDrag();
+    } else {
+        btn.innerText = "🖐️ 모바일 키 위치 drag 배치 수정";
+        mobileControls.classList.remove('edit-active');
+        mobileControls.style.display = (gameStarted && isMobile && !isRespawning && !isSpectating) ? 'block' : 'none';
+        disableKeyDrag();
+    }
+}
+
+function enableKeyDrag() {
+    const zones = document.querySelectorAll('.touch-zone');
+    zones.forEach(zone => {
+        zone.onpointerdown = function(e) {
+            if(!isEditingKeys) return;
+            let shiftX = e.clientX - zone.getBoundingClientRect().left;
+            let shiftY = e.clientY - zone.getBoundingClientRect().top;
+
+            function moveAt(pageX, pageY) {
+                const rect = gameFrame.getBoundingClientRect();
+                zone.style.left = (pageX - rect.left - shiftX) + 'px';
+                zone.style.top = (pageY - rect.top - shiftY) + 'px';
+                zone.style.bottom = 'auto';
+                zone.style.right = 'auto';
+            }
+
+            function onPointerMove(e) { moveAt(e.clientX, e.clientY); }
+            document.addEventListener('pointermove', onPointerMove);
+
+            zone.onpointerup = function() {
+                document.removeEventListener('pointermove', onPointerMove);
+                zone.onpointerup = null;
+            };
+        };
+    });
+}
+
+function disableKeyDrag() {
+    const zones = document.querySelectorAll('.touch-zone');
+    zones.forEach(zone => { zone.onpointerdown = null; });
+}
+
+
+function rectCircleHit(cx, cy, radius, rx, ry, rw, rh) {
+    const qx = Math.max(rx, Math.min(cx, rx + rw));
+    const qy = Math.max(ry, Math.min(cy, ry + rh));
+    const dx = cx - qx, dy = cy - qy;
+    return dx * dx + dy * dy < radius * radius;
+}
+
+const DOOR_INTERACTION_RANGE=120; // 열린 문짝이 아닌 고정된 출입구 중심 기준
+function doorClosed(h){return h.doorHp>0&&!h.doorOpen;}
+function houseDoorRect(h){
+    const side=h.doorSide||'bottom',t=h.wallThickness||18,w=h.doorWidth||64,c=h.doorPos??.5;
+    if(side==='top'||side==='bottom')return {x:h.x+h.w*c-w/2,y:side==='top'?h.y:h.y+h.h-t,w,h:t};
+    return {x:side==='left'?h.x:h.x+h.w-t,y:h.y+h.h*c-w/2,w:t,h:w};
+}
+function invalidateDoorGeometry(h){
+    delete h._wallRectsCache;delete h._ballisticRectsCache;delete h._roofVisionCache;
+    drawFogOfWar._lastBuild=0;
+}
+function sendDoorState(h){broadcastData({type:'DOOR_STATE',doorId:h.doorId,hp:h.doorHp,open:h.doorOpen});}
+function setHouseDoor(h,open){
+    if(!isHost||!h||h.doorHp<=0)return false;
+    if(!open){const r=houseDoorRect(h);if([...roomHumans(),...aiBots].some(p=>p.hp>0&&!p.isDead&&rectCircleHit(p.x,p.y,16,r.x,r.y,r.w,r.h)))return false;}
+    if(h.doorOpen===open)return true;
+    h.doorOpen=open;invalidateDoorGeometry(h);sendDoorState(h);return true;
+}
+function toggleDoorForPlayer(p,h){
+    if(!isHost||!gameStarted||gameEnded||selectedMode!=='br'||!p||p.hp<=0||p.isDead||p.isDowned||isAssignedSpectator(p.id)||!h||h.doorHp<=0)return false;
+    const c=getHouseDoorCenterPoint(h);
+    if(Math.hypot(c.x-p.x,c.y-p.y)>DOOR_INTERACTION_RANGE)return false;
+    if(Date.now()-(p._lastDoorUse||0)<250)return false;
+    p._lastDoorUse=Date.now();return setHouseDoor(h,!h.doorOpen);
+}
+function interactDoor(){
+    if(!gameStarted||gameEnded||isSpectating||isRespawning||isSpawnSelecting||myPlayer.hp<=0||selectedMode!=='br')return;
+    let best=null,distance=DOOR_INTERACTION_RANGE;
+    for(const h of nearbyObstacles(myPlayer.x-DOOR_INTERACTION_RANGE,myPlayer.y-DOOR_INTERACTION_RANGE,myPlayer.x+DOOR_INTERACTION_RANGE,myPlayer.y+DOOR_INTERACTION_RANGE)){
+        if(h.type!=='house'||!(h.doorHp>0))continue;
+        const c=getHouseDoorCenterPoint(h),d=Math.hypot(c.x-myPlayer.x,c.y-myPlayer.y);
+        if(d<=distance){distance=d;best=h;}
+    }
+    if(!best)return;
+    if(isHost)toggleDoorForPlayer(myPlayer,best);
+    else broadcastData({type:'DOOR_USE',doorId:best.doorId,player:myPlayer});
+}
+function applyDoorState(state){
+    const h=obstacles.find(o=>o.doorId===state.doorId);if(!h||!Number.isFinite(state.hp))return;
+    const hp=Math.max(0,Math.min(4,state.hp)),open=hp===0||!!state.open;
+    if(h.doorHp!==hp||h.doorOpen!==open){h.doorHp=hp;h.doorOpen=open;invalidateDoorGeometry(h);}
+}
+function damageHouseDoor(h,shotId){
+    if(!isHost||!doorClosed(h))return;
+    if(!h._doorHits)h._doorHits=new Set();
+    if(shotId && h._doorHits.has(shotId))return;
+    if(shotId)h._doorHits.add(shotId);
+    h.doorHp--;if(h.doorHp<=0)h.doorOpen=true;
+    invalidateDoorGeometry(h);sendDoorState(h);
+}
+function drawHouseDoor(h){
+    if(!(h.doorHp>0))return;
+    const r=houseDoorRect(h),side=h.doorSide||'bottom';
+    const horizontal=side==='top'||side==='bottom';
+    const x=horizontal?0:-r.w/2,y=horizontal?-r.h/2:0;
+    ctx.save();
+    ctx.translate(horizontal?r.x:r.x+r.w/2,horizontal?r.y+r.h/2:r.y);
+    if(h.doorOpen)ctx.rotate((side==='top'||side==='right'?-1:1)*Math.PI/2);
+    // 열림과 닫힘 모두 같은 문짝을 사용하고 경첩을 기준으로 방향만 바꾼다.
+    ctx.fillStyle='#88552e';ctx.fillRect(x,y,r.w,r.h);
+    ctx.strokeStyle='#dfb880';ctx.lineWidth=2;ctx.strokeRect(x+2,y+2,r.w-4,r.h-4);
+    ctx.fillStyle='#ffd77a';ctx.beginPath();
+    ctx.arc(x+r.w*(horizontal?.75:.5),y+r.h*(horizontal?.5:.75),3,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+}
+function getHouseWallRects(obs) {
+    if (obs && obs._wallRectsCache) return obs._wallRectsCache;
+    const t = obs.wallThickness || 18;
+    const doorW = obs.doorWidth || 64;
+    const side = obs.doorSide || 'bottom';
+    const doorCenter = obs.doorPos == null ? 0.5 : obs.doorPos;
+    const rects = [];
+
+    // left/right walls
+    if (side === 'left') {
+        const cy = obs.y + obs.h * doorCenter, d0 = cy - doorW/2, d1 = cy + doorW/2;
+        rects.push({x:obs.x,y:obs.y,w:t,h:Math.max(0,d0-obs.y)});
+        rects.push({x:obs.x,y:d1,w:t,h:Math.max(0,obs.y+obs.h-d1)});
+    } else rects.push({x:obs.x,y:obs.y,w:t,h:obs.h});
+
+    if (side === 'right') {
+        const cy = obs.y + obs.h * doorCenter, d0 = cy - doorW/2, d1 = cy + doorW/2;
+        rects.push({x:obs.x+obs.w-t,y:obs.y,w:t,h:Math.max(0,d0-obs.y)});
+        rects.push({x:obs.x+obs.w-t,y:d1,w:t,h:Math.max(0,obs.y+obs.h-d1)});
+    } else rects.push({x:obs.x+obs.w-t,y:obs.y,w:t,h:obs.h});
+
+    // top/bottom walls
+    if (side === 'top') {
+        const cx = obs.x + obs.w * doorCenter, d0 = cx - doorW/2, d1 = cx + doorW/2;
+        rects.push({x:obs.x,y:obs.y,w:Math.max(0,d0-obs.x),h:t});
+        rects.push({x:d1,y:obs.y,w:Math.max(0,obs.x+obs.w-d1),h:t});
+    } else rects.push({x:obs.x,y:obs.y,w:obs.w,h:t});
+
+    if (side === 'bottom') {
+        const cx = obs.x + obs.w * doorCenter, d0 = cx - doorW/2, d1 = cx + doorW/2;
+        rects.push({x:obs.x,y:obs.y+obs.h-t,w:Math.max(0,d0-obs.x),h:t});
+        rects.push({x:d1,y:obs.y+obs.h-t,w:Math.max(0,obs.x+obs.w-d1),h:t});
+    } else rects.push({x:obs.x,y:obs.y+obs.h-t,w:obs.w,h:t});
+
+    if(doorClosed(obs))rects.push(houseDoorRect(obs));
+    const out = rects.filter(r => r.w > 0 && r.h > 0);
+    if (obs) obs._wallRectsCache = out;
+    return out;
+}
+
+// 집 창문: 이동은 막지만 탄환/시야는 통과할 수 있는 실제 개구부
+function getHouseWindowOpenings(obs) {
+    if (obs && obs._windowDefsCache) {
+        for (const w of obs._windowDefsCache) w.isBroken = !!(obs.brokenWindows && obs.brokenWindows[w.id]);
+        return obs._windowDefsCache;
+    }
+    const seed = Math.floor((obs.seed || 0.5) * 100000);
+    const windows = [];
+    const t = obs.wallThickness || 18;
+    const add = (side, center, size) => windows.push({side, center, size, id: windows.length});
+    if (obs.w > 260) {
+        add('top', .27 + ((seed % 13)/100), 58 + (seed % 17));
+        add('bottom', .68 - ((seed % 11)/100), 58 + ((seed>>2) % 17));
+        if (obs.w > 390) add('top', .72 - ((seed % 7)/100), 54 + ((seed>>3)%15));
+    }
+    if (obs.h > 230) {
+        add('left', .34 + ((seed % 9)/100), 54 + ((seed>>1)%16));
+        add('right', .66 - ((seed % 8)/100), 54 + ((seed>>4)%16));
+        if (obs.h > 360) add('right', .30 + ((seed % 6)/100), 50 + ((seed>>5)%14));
+    }
+    // 문과 너무 겹치는 창문은 제외
+    const filtered = windows.filter(w => {
+        if (w.side !== obs.doorSide) return true;
+        const doorCenter = obs.doorPos == null ? .5 : obs.doorPos;
+        const sideLen = (w.side==='top'||w.side==='bottom') ? obs.w : obs.h;
+        const doorHalf = (obs.doorWidth||64)/(2*sideLen);
+        const winHalf = w.size/(2*sideLen);
+        return Math.abs(w.center-doorCenter) > doorHalf+winHalf+.04;
+    });
+    filtered.forEach((w, idx) => {
+        w.id = idx;
+        w.isBroken = !!(obs.brokenWindows && obs.brokenWindows[idx]);
+    });
+    if (obs) obs._windowDefsCache = filtered;
+    return filtered;
+}
+
+
+function getHouseOpeningRect(obs, opening) {
+    const t = obs.wallThickness || 18;
+    if (opening.side === 'top' || opening.side === 'bottom') {
+        const x = obs.x + obs.w * opening.center - opening.size / 2;
+        const y = opening.side === 'top' ? obs.y - 2 : obs.y + obs.h - t - 2;
+        return {x, y, w: opening.size, h: t + 4};
+    }
+    const y = obs.y + obs.h * opening.center - opening.size / 2;
+    const x = opening.side === 'left' ? obs.x - 2 : obs.x + obs.w - t - 2;
+    return {x, y, w: t + 4, h: opening.size};
+}
+
+function segmentIntersectsRect(x1,y1,x2,y2,r) {
+    let t0=0, t1=1;
+    const dx=x2-x1, dy=y2-y1;
+    const p=[-dx,dx,-dy,dy];
+    const q=[x1-r.x,r.x+r.w-x1,y1-r.y,r.y+r.h-y1];
+    for(let i=0;i<4;i++){
+        if(Math.abs(p[i])<1e-9){ if(q[i]<0) return false; }
+        else {
+            const u=q[i]/p[i];
+            if(p[i]<0){ if(u>t1) return false; if(u>t0) t0=u; }
+            else { if(u<t0) return false; if(u<t1) t1=u; }
+        }
+    }
+    return true;
+}
+
+function breakWindow(house, windowId, hitX, hitY) {
+    if (!house || house.type !== 'house') return false;
+    house.brokenWindows = house.brokenWindows || {};
+    if (house.brokenWindows[windowId]) return false;
+    house.brokenWindows[windowId] = true;
+    if (!window.glassShards) window.glassShards = [];
+    for (let i=0;i<9;i++) {
+        const a=Math.random()*Math.PI*2, sp=.5+Math.random()*2.2;
+        window.glassShards.push({x:hitX,y:hitY,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,size:2+Math.random()*3});
+    }
+    if (isHost) broadcastData({type:'WINDOW_BREAK', houseSeed:house.seed, windowId});
+    return true;
+}
+
+function detectAndBreakWindowOnBullet(b) {
+    for (const obs of obstacles) {
+        if (obs.type !== 'house') continue;
+        if (Math.max(b.prevX,b.x) < obs.x-8 || Math.min(b.prevX,b.x) > obs.x+obs.w+8 ||
+            Math.max(b.prevY,b.y) < obs.y-8 || Math.min(b.prevY,b.y) > obs.y+obs.h+8) continue;
+        const wins=getHouseWindowOpenings(obs);
+        for(const w of wins){
+            if(w.isBroken) continue;
+            const r=getHouseOpeningRect(obs,w);
+            if(segmentIntersectsRect(b.prevX,b.prevY,b.x,b.y,r)){
+                breakWindow(obs,w.id,(b.prevX+b.x)/2,(b.prevY+b.y)/2);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function getHouseDoorOpening(obs){
+    return {side:obs.doorSide||'bottom', center:obs.doorPos==null?.5:obs.doorPos, size:obs.doorWidth||64, id:'door', isDoor:true, isBroken:true};
+}
+
+function getRoofVisionOpenings(obs){
+    return [...(doorClosed(obs)?[]:[getHouseDoorOpening(obs)]), ...getHouseWindowOpenings(obs)];
+}
+
+function isSightSampleClearToOpening(obs, viewer, tx, ty) {
+    const dx = tx-viewer.x, dy = ty-viewer.y;
+    const dist = Math.hypot(dx,dy);
+    if(dist < 1) return true;
+    const endX=tx-dx/dist*4, endY=ty-dy/dist*4;
+    const steps=Math.max(8,Math.ceil(dist/28));
+    for(let i=1;i<steps;i++){
+        const x=viewer.x+(endX-viewer.x)*(i/steps);
+        const y=viewer.y+(endY-viewer.y)*(i/steps);
+        for(const other of obstacles){
+            if(other===obs) continue;
+            const pad=other.type==='tree'?TREE_HITBOX_PADDING:0;
+            if(x<other.x-pad||x>other.x+other.w+pad||y<other.y-pad||y>other.y+other.h+pad) continue;
+            if(other.type==='house'){
+                if(getHouseBallisticWallRects(other).some(wr=>rectCircleHit(x,y,1,wr.x,wr.y,wr.w,wr.h))) return false;
+            }else if(other.type==='tree'){
+                if(rectCircleHit(x,y,1,other.x-pad,other.y-pad,other.w+pad*2,other.h+pad*2)) return false;
+            }else if(rectCircleHit(x,y,1,other.x,other.y,other.w,other.h)) return false;
+        }
+    }
+    return true;
+}
+
+function isOpeningVisibleFromViewer(obs, viewer, opening) {
+    const r=getHouseOpeningRect(obs,opening);
+    let samples;
+    if(opening.side==='top'||opening.side==='bottom'){
+        const y=r.y+r.h/2;
+        samples=[{x:r.x+r.w*.16,y},{x:r.x+r.w*.50,y},{x:r.x+r.w*.84,y}];
+    }else{
+        const x=r.x+r.w/2;
+        samples=[{x,y:r.y+r.h*.16},{x,y:r.y+r.h*.50},{x,y:r.y+r.h*.84}];
+    }
+    // 개구부가 일부라도 다른 장애물에 가려지면 내부 노출을 막는다.
+    return samples.every(pt=>isSightSampleClearToOpening(obs,viewer,pt.x,pt.y));
+}
+
+function addRoofVisionCutoutPath(path, obs, viewer, opening){
+    const r=getHouseOpeningRect(obs,opening);
+    let a,b;
+    if(opening.side==='top'||opening.side==='bottom'){
+        a={x:r.x,y:r.y+r.h/2}; b={x:r.x+r.w,y:r.y+r.h/2};
+    } else {
+        a={x:r.x+r.w/2,y:r.y}; b={x:r.x+r.w/2,y:r.y+r.h};
+    }
+    // Only openings roughly facing the viewer reveal the interior.
+    const mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+    let outward={x:0,y:0};
+    if(opening.side==='top') outward.y=-1;
+    if(opening.side==='bottom') outward.y=1;
+    if(opening.side==='left') outward.x=-1;
+    if(opening.side==='right') outward.x=1;
+    const toViewer={x:viewer.x-mid.x,y:viewer.y-mid.y};
+    if(toViewer.x*outward.x+toViewer.y*outward.y < -18) return;
+    if(!isOpeningVisibleFromViewer(obs, viewer, opening)) return;
+    const extend=(pt)=>{
+        const vx=pt.x-viewer.x, vy=pt.y-viewer.y;
+        const len=Math.hypot(vx,vy)||1;
+        const far=Math.max(obs.w,obs.h)*2.8+500;
+        return {x:pt.x+vx/len*far,y:pt.y+vy/len*far};
+    };
+    const fa=extend(a), fb=extend(b);
+    path.moveTo(a.x,a.y); path.lineTo(b.x,b.y); path.lineTo(fb.x,fb.y); path.lineTo(fa.x,fa.y); path.closePath();
+}
+
+function updateGlassShards(){
+    if(!window.glassShards) return;
+    for(let i=window.glassShards.length-1;i>=0;i--){
+        const g=window.glassShards[i]; g.x+=g.vx; g.y+=g.vy; g.vx*=.94; g.vy*=.94; g.life-=.035;
+        if(g.life<=0) window.glassShards.splice(i,1);
+    }
+}
+
+function drawGlassShards(){
+    if(!window.glassShards) return;
+    ctx.save();
+    window.glassShards.forEach(g=>{ctx.globalAlpha=Math.max(0,g.life);ctx.fillStyle='#bdefff';ctx.beginPath();ctx.moveTo(g.x-g.size,g.y);ctx.lineTo(g.x+g.size,g.y-g.size);ctx.lineTo(g.x+g.size*.3,g.y+g.size);ctx.closePath();ctx.fill();});
+    ctx.restore();
+}
+
+function subtractIntervals(totalStart, totalEnd, gaps) {
+    let spans = [[totalStart,totalEnd]];
+    gaps.sort((a,b)=>a[0]-b[0]).forEach(([g0,g1])=>{
+        const next=[];
+        spans.forEach(([a,b])=>{
+            if(g1<=a || g0>=b) next.push([a,b]);
+            else { if(g0>a) next.push([a,g0]); if(g1<b) next.push([g1,b]); }
+        });
+        spans=next;
+    });
+    return spans.filter(([a,b])=>b-a>1);
+}
+
+function getHouseBallisticWallRects(obs) {
+    if (obs && obs._ballisticRectsCache) return obs._ballisticRectsCache;
+    const t=obs.wallThickness||18;
+    const wins=getHouseWindowOpenings(obs);
+    const rects=[];
+    const doorSide=obs.doorSide||'bottom';
+    const doorPos=obs.doorPos==null?.5:obs.doorPos;
+    const doorW=obs.doorWidth||64;
+    ['top','bottom','left','right'].forEach(side=>{
+        const len=(side==='top'||side==='bottom')?obs.w:obs.h;
+        const gaps=[];
+        wins.filter(w=>w.side===side).forEach(w=>{
+            const c=w.center*len; gaps.push([Math.max(0,c-w.size/2),Math.min(len,c+w.size/2)]);
+        });
+        if(side===doorSide){ const c=doorPos*len; gaps.push([Math.max(0,c-doorW/2),Math.min(len,c+doorW/2)]); }
+        subtractIntervals(0,len,gaps).forEach(([a,b])=>{
+            if(side==='top') rects.push({x:obs.x+a,y:obs.y,w:b-a,h:t});
+            else if(side==='bottom') rects.push({x:obs.x+a,y:obs.y+obs.h-t,w:b-a,h:t});
+            else if(side==='left') rects.push({x:obs.x,y:obs.y+a,w:t,h:b-a});
+            else rects.push({x:obs.x+obs.w-t,y:obs.y+a,w:t,h:b-a});
+        });
+    });
+    if(doorClosed(obs))rects.push(houseDoorRect(obs));
+    if (obs) obs._ballisticRectsCache = rects;
+    return rects;
+}
+
+function isPointInsideHouse(x, y, obs, padding = 0) {
+    return obs && obs.type === 'house' &&
+        x > obs.x + padding && x < obs.x + obs.w - padding &&
+        y > obs.y + padding && y < obs.y + obs.h - padding;
+}
+
+function getHouseContainingPoint(x, y) {
+    return nearbyObstacles(x,y,x,y).find(o => isPointInsideHouse(x, y, o, (o.wallThickness || 18) + 2)) || null;
+}
+
+const TREE_HITBOX_PADDING = 14;
+
+function obstacleHitsCircle(obs, x, y, radius = 15) {
+    if (obs.type === 'house') {
+        return getHouseWallRects(obs).some(r => rectCircleHit(x, y, radius, r.x, r.y, r.w, r.h));
+    }
+    if (obs.type === 'tree') {
+        return rectCircleHit(x, y, radius, obs.x - TREE_HITBOX_PADDING, obs.y - TREE_HITBOX_PADDING, obs.w + TREE_HITBOX_PADDING*2, obs.h + TREE_HITBOX_PADDING*2);
+    }
+    return rectCircleHit(x, y, radius, obs.x, obs.y, obs.w, obs.h);
+}
+
+function checkObstacleCollision(x, y, radius = 15) {
+    for (const obs of obstacles) {
+        const pad = obs.type === 'tree' ? TREE_HITBOX_PADDING : 0;
+        if (x + radius < obs.x-pad || x - radius > obs.x + obs.w+pad || y + radius < obs.y-pad || y - radius > obs.y + obs.h+pad) continue;
+        if (obstacleHitsCircle(obs, x, y, radius)) return true;
+    }
+    return false;
+}
+
+function checkBulletObstacleCollision(x, y, radius = 2) {
+    for (const obs of obstacles) {
+        if (x + radius < obs.x || x - radius > obs.x + obs.w || y + radius < obs.y || y - radius > obs.y + obs.h) continue;
+        if (obs.type === 'house') {
+            if (getHouseBallisticWallRects(obs).some(r=>rectCircleHit(x,y,radius,r.x,r.y,r.w,r.h))) return true;
+        } else if (obs.type === 'tree') {
+            if (rectCircleHit(x,y,radius,obs.x-TREE_HITBOX_PADDING,obs.y-TREE_HITBOX_PADDING,obs.w+TREE_HITBOX_PADDING*2,obs.h+TREE_HITBOX_PADDING*2)) return true;
+        } else if (rectCircleHit(x,y,radius,obs.x,obs.y,obs.w,obs.h)) return true;
+    }
+    return false;
+}
+
+// 빠른 총알이 한 프레임에 장애물을 건너뛰는(터널링) 현상을 막는 선분 충돌 판정
+function segmentHitsExpandedRect(x1, y1, x2, y2, rect, padding = 0) {
+    return segmentIntersectsRect(x1, y1, x2, y2, {
+        x: rect.x - padding, y: rect.y - padding,
+        w: rect.w + padding * 2, h: rect.h + padding * 2
+    });
+}
+
+function checkBulletPathObstacleCollision(x1, y1, x2, y2, radius = 2) {
+    const minX = Math.min(x1, x2) - radius, maxX = Math.max(x1, x2) + radius;
+    const minY = Math.min(y1, y2) - radius, maxY = Math.max(y1, y2) + radius;
+    for (const obs of obstacles) {
+        const treePad = obs.type === 'tree' ? TREE_HITBOX_PADDING : 0;
+        if (maxX < obs.x - treePad || minX > obs.x + obs.w + treePad ||
+            maxY < obs.y - treePad || minY > obs.y + obs.h + treePad) continue;
+        if (obs.type === 'house') {
+            if (getHouseBallisticWallRects(obs).some(r => segmentHitsExpandedRect(x1,y1,x2,y2,r,radius))) return true;
+        } else if (obs.type === 'tree') {
+            const r={x:obs.x-TREE_HITBOX_PADDING,y:obs.y-TREE_HITBOX_PADDING,w:obs.w+TREE_HITBOX_PADDING*2,h:obs.h+TREE_HITBOX_PADDING*2};
+            if (segmentHitsExpandedRect(x1,y1,x2,y2,r,radius)) return true;
+        } else if (segmentHitsExpandedRect(x1,y1,x2,y2,obs,radius)) return true;
+    }
+    return false;
+}
+
+function areAllies(a, b) {
+    if (!a || !b) return false;
+    if (a.id === b.id) return true;
+    const aTeam = a.teamId ?? a.team ?? null;
+    const bTeam = b.teamId ?? b.team ?? null;
+    return aTeam != null && bTeam != null && aTeam === bTeam;
+}
+
+function getCombatEntityById(id) {
+    if (!id) return null;
+    if (myPlayer && myPlayer.id === id) return myPlayer;
+    const remote = Object.values(remotePlayers).find(p => p.id === id);
+    if (remote) return remote;
+    return aiBots.find(b => b.id === id) || null;
+}
+
+function isBotEntity(entity) {
+    return !!entity && typeof entity.id === 'string' && entity.id.startsWith('bot_');
+}
+
+function botBulletCanDamage(ownerId, target) {
+    const owner = getCombatEntityById(ownerId);
+    return !areAllies(owner, target);
+}
+
+function getNameColor(p) {
+    if (p.id === myPlayer.id) return '#00ffcc';
+    return areAllies(myPlayer, p) ? '#58a6ff' : '#ff4d5a';
+}
+
+function getSafeSpawnPos(padding = 200, bound = WORLD_SIZE) {
+    let safeX, safeY;
+    let attempts = 0;
+    do {
+        safeX = Math.random() * (bound - padding * 2) + padding;
+        safeY = Math.random() * (bound - padding * 2) + padding;
+        attempts++;
+    } while (checkObstacleCollision(safeX, safeY, 25) && attempts < 200);
+    return { x: safeX, y: safeY };
+}
+
+function getEdgeRandomSpawnPos(padding = 400, bound = WORLD_SIZE) {
+    let side = Math.floor(Math.random() * 4);
+    let x, y;
+    if(side === 0) { x = Math.random() * bound; y = padding; }
+    else if(side === 1) { x = bound - padding; y = Math.random() * bound; }
+    else if(side === 2) { x = Math.random() * bound; y = bound - padding; }
+    else { x = padding; y = Math.random() * bound; }
+    return { x: Math.max(100, Math.min(bound - 100, x)), y: Math.max(100, Math.min(bound - 100, y)) };
+}
+
+
+
+let currentMapSeed = 0;
+
+function hashSeed(seed) {
+    let h = Number(seed) >>> 0;
+    h ^= h << 13; h >>>= 0;
+    h ^= h >>> 17; h >>>= 0;
+    h ^= h << 5; h >>>= 0;
+    return h >>> 0;
+}
+
+function createSeededRandom(seed) {
+    let a = (Number(seed) >>> 0) || 0x6d2b79f5;
+    return function() {
+        a |= 0;
+        a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+
+function applyMapWorldSize(mapData) {
+    if (!mapData || !mapData.worldSize) return;
+    try { WORLD_SIZE = mapData.worldSize; } catch(e) {}
+}
+
+function generateMapData(mode, seed = currentMapSeed || 1) {
+    const rand = createSeededRandom(seed);
+    // 데스매치 전용: 집/나무가 없는 작은 아레나
+    if (mode === 'deathmatch' || mode === 'dm' || mode === 'normal') {
+        const size = 2400;
+        const obsCount = 25;
+        const itemCount = 80;
+
+        const newObstacles = [];
+        for (let i = 0; i < obsCount; i++) {
+            const w = rand() * 150 + 50;
+            const h = rand() * 150 + 50;
+            const x = rand() * (size - w - 200) + 100;
+            const y = rand() * (size - h - 200) + 100;
+            // 데스매치 장애물은 그림자/충돌 좌표와 동일한 실제 벽으로 표시한다.
+            newObstacles.push({ type: 'wall', x, y, w, h });
+        }
+
+        const types = [
+            'ar', 'sniper', 'shotgun',
+            '1x', '2x', '3x', '4x', '8x',
+            'ammo_ar', 'ammo_sniper', 'ammo_shotgun',
+            'helmet_1', 'helmet_2', 'helmet_3',
+            'body_1', 'body_2', 'body_3'
+        ];
+
+        const newItems = [];
+        for (let i = 0; i < itemCount; i++) {
+            newItems.push({
+                id: 'item_' + Math.floor(rand() * 0x7fffffff).toString(36),
+                x: rand() * (size - 400) + 200,
+                y: rand() * (size - 400) + 200,
+                type: types[Math.floor(rand() * types.length)]
+            });
+        }
+
+        return {
+            seed: Number(seed) || 1,
+            worldSize: size,
+            obstacles: newObstacles,
+            items: newItems
+        };
+    }
+
+
+    const size = mode === 'normal' ? 2400 : 12000;
+    const itemCount = mode === 'normal' ? 40 : 280;
+    const newObstacles = [];
+    const houses = [];
+
+    // 이전보다 마을 수는 줄이고, 각 집은 훨씬 크게 만든다.
+    const clusterCount = mode === 'normal' ? 2 : 9;
+    const housesPerCluster = mode === 'normal' ? [3, 5] : [5, 9];
+
+    function overlapsExisting(x, y, w, h, margin = 60) {
+        return newObstacles.some(o =>
+            x - margin < o.x + o.w && x + w + margin > o.x &&
+            y - margin < o.y + o.h && y + h + margin > o.y
+        );
+    }
+
+    const roofKinds = ['gable','hip','flat','split','metal'];
+    const wallPalettes = [0,1,2,3,4,5];
+
+    for (let c = 0; c < clusterCount; c++) {
+        const edge = mode === 'normal' ? 330 : 650;
+        const cx = edge + rand() * Math.max(1, size - edge*2);
+        const cy = edge + rand() * Math.max(1, size - edge*2);
+        const count = Math.floor(housesPerCluster[0] + rand() * (housesPerCluster[1]-housesPerCluster[0]+1));
+        const clusterRadius = mode === 'normal' ? 420 : 850;
+
+        for (let i = 0; i < count; i++) {
+            let placed = false;
+            for (let tries = 0; tries < 70 && !placed; tries++) {
+                const a = rand() * Math.PI * 2;
+                const r = Math.sqrt(rand()) * clusterRadius;
+                const styleVariant = Math.floor(rand()*5);
+                let w = 240 + rand()*250;
+                let h = 200 + rand()*220;
+                if (styleVariant === 1) w *= 1.25;
+                if (styleVariant === 2) h *= 1.22;
+                if (styleVariant === 3) { w *= .88; h *= 1.28; }
+
+                const x = Math.max(90, Math.min(size-w-90, cx + Math.cos(a)*r - w/2));
+                const y = Math.max(90, Math.min(size-h-90, cy + Math.sin(a)*r - h/2));
+                if (!overlapsExisting(x,y,w,h,75)) {
+                    const side = ['bottom','top','left','right'][Math.floor(rand()*4)];
+                    const house = {
+                        x,y,w,h,type:'house',
+                        ...(mode==='br'?{doorId:'door_'+newObstacles.length,doorHp:4,doorOpen:false}:{}),
+                        style: wallPalettes[Math.floor(rand()*wallPalettes.length)],
+                        roofKind: roofKinds[Math.floor(rand()*roofKinds.length)],
+                        seed: rand(),
+                        wallThickness: 18 + Math.floor(rand()*8),
+                        doorSide: side,
+                        doorWidth: 58 + rand()*24,
+                        doorPos: .34 + rand()*.32,
+                        roomStyle: Math.floor(rand()*4),
+                        brokenWindows: {}
+                    };
+                    newObstacles.push(house);
+                    houses.push(house);
+                    placed = true;
+                }
+            }
+        }
+    }
+
+    // 나무는 숲 덩어리 대신 맵 전체에 넓은 간격으로 분산 배치한다.
+    const targetTreeCount = mode === 'normal' ? 38 : 260;
+    const minTreeDistance = mode === 'normal' ? 150 : 230;
+    const placedTrees = [];
+    let treeAttempts = 0;
+    while (placedTrees.length < targetTreeCount && treeAttempts < targetTreeCount * 45) {
+        treeAttempts++;
+        const trunk = 32 + rand()*16;
+        const x = 70 + rand()*Math.max(1,size-trunk-140);
+        const y = 70 + rand()*Math.max(1,size-trunk-140);
+        const cx=x+trunk/2, cy=y+trunk/2;
+        const tooNearHouse = houses.some(o =>
+            x-115 < o.x+o.w && x+trunk+115 > o.x &&
+            y-115 < o.y+o.h && y+trunk+115 > o.y
+        );
+        if (tooNearHouse) continue;
+        let tooNearTree=false;
+        for(const tr of placedTrees){
+            if(Math.hypot(cx-tr.cx,cy-tr.cy)<minTreeDistance){ tooNearTree=true; break; }
+        }
+        if(tooNearTree) continue;
+        const tree={x,y,w:trunk,h:trunk,type:'tree',style:Math.floor(rand()*3),seed:rand()};
+        newObstacles.push(tree);
+        placedTrees.push({cx,cy});
+    }
+
+    const types = [
+        // 아이템 총량은 유지하고 총의 추첨 비중을 약 36%로 높인다.
+        'ar','sniper','shotgun','ar','sniper','shotgun',
+        'ar','sniper','shotgun','1x','2x','3x','4x','8x',
+        'ammo_ar','ammo_sniper','ammo_shotgun',
+        'helmet_1','helmet_2','helmet_3','body_1','body_2','body_3',
+        'bandage','medkit'
+    ];
+
+    // 맵에 자연 생성되는 아이템은 전부 집 내부에 둔다.
+    const newItems = [];
+    if (houses.length) {
+        for (let i=0;i<itemCount;i++) {
+            const house = houses[Math.floor(rand()*houses.length)];
+            const margin = (house.wallThickness||20) + 34;
+            const x = house.x + margin + rand()*Math.max(20,house.w-margin*2);
+            const y = house.y + margin + rand()*Math.max(20,house.h-margin*2);
+            newItems.push({
+                id:'item_'+rand().toString(36).substring(2,9),
+                x,y,
+                type:types[Math.floor(rand()*types.length)],
+                houseSeed:house.seed
+            });
+        }
+    }
+
+    return {obstacles:newObstacles,items:newItems,seed:Number(seed)>>>0};
+}
+
+
+function checkObstacleCollisionForList(x, y, radius, list) {
+    for (const obs of list) {
+        if (obs.type === 'house') {
+            const rects = getHouseWallRects(obs);
+            if (rects.some(r => rectCircleHit(x,y,radius,r.x,r.y,r.w,r.h))) return true;
+        } else if (obs.type === 'tree') {
+            if (rectCircleHit(x,y,radius,obs.x-TREE_HITBOX_PADDING,obs.y-TREE_HITBOX_PADDING,obs.w+TREE_HITBOX_PADDING*2,obs.h+TREE_HITBOX_PADDING*2)) return true;
+        } else if (rectCircleHit(x,y,radius,obs.x,obs.y,obs.w,obs.h)) return true;
+    }
+    return false;
+}
+
+function isAssignedSpectator(id){return !String(id).startsWith('bot_') && spectatorIds.has(id);}
+function roomHumans(){return [myPlayer,...Object.values(remotePlayers)];}
+function roomTeamRoster(){
+    if(!isHost)return roomRoster;
+    const enabled=document.getElementById('aiToggle').value==='true';
+    const count=enabled?Math.max(0,Math.min(selectedMode==='br'?100:20,parseInt(document.getElementById('aiCountInput').value)||0)):0;
+    return [...roomHumans(),...Array.from({length:count},(_,i)=>({id:'bot_'+i,name:'AI 봇_'+(i+1),isBot:true}))];
+}
+function roomTeamCount(roster=roomTeamRoster()){return Math.ceil(roster.filter(p=>!isAssignedSpectator(p.id)).length/teamMaxSize);}
+function teamOccupancy(team,exceptId=null){return roomTeamRoster().filter(p=>p.id!==exceptId&&!isAssignedSpectator(p.id)&&teamAssignments[p.id]===team).length;}
+function firstFreeTeam(id){let team=1;while(teamOccupancy(team,id)>=teamMaxSize)team++;return team;}
+function applyEntityTeam(p){
+    p.teamId=selectedMode==='br'&&!isAssignedSpectator(p.id)&&teamAssignments[p.id]?'team_'+teamAssignments[p.id]:null;
+    p.team=null;return p;
+}
+function normalizeRoomTeams(roster=roomTeamRoster()){
+    const used=new Map(),count=roomTeamCount(roster),ids=new Set(roster.map(p=>p.id));
+    for(const id of Object.keys(teamAssignments))if(!ids.has(id))delete teamAssignments[id];
+    for(const p of roster){
+        if(isAssignedSpectator(p.id)){applyEntityTeam(p);continue;}
+        let team=teamAssignments[p.id];
+        if(!Number.isInteger(team)||team<1||team>count||(used.get(team)||0)>=teamMaxSize){team=1;while((used.get(team)||0)>=teamMaxSize)team++;}
+        teamAssignments[p.id]=team;used.set(team,(used.get(team)||0)+1);applyEntityTeam(p);
+    }
+}
+function setRoomTeam(id,value){
+    if(!isHost||gameStarted||selectedMode!=='br'||isAssignedSpectator(id))return false;
+    const team=Number(value);
+    if(!Number.isInteger(team)||team<1||team>roomTeamCount()||!roomTeamRoster().some(p=>p.id===id))return false;
+    if(teamOccupancy(team,id)>=teamMaxSize){
+        const previous=teamAssignments[id];
+        if(!previous||previous===team)return false;
+        const occupants=roomTeamRoster().filter(p=>p.id!==id&&!isAssignedSpectator(p.id)&&teamAssignments[p.id]===team);
+        const swap=occupants.find(p=>p.id.startsWith('bot_'))||occupants[occupants.length-1];
+        if(!swap)return false;teamAssignments[swap.id]=previous;
+    }
+    teamAssignments[id]=team;publishRoomRoles();return true;
+}
+function setRoomSpectator(id,checked){
+    if(!isHost||gameStarted||!roomHumans().some(p=>p.id===id))return false;
+    if(checked)spectatorIds.add(id);else {spectatorIds.delete(id);teamAssignments[id]=firstFreeTeam(id);}
+    publishRoomRoles();return true;
+}
+function setTeamMaxSize(value){
+    if(!isHost||gameStarted)return;
+    teamMaxSize=Math.max(1,Math.min(16,Math.floor(Number(value)||1)));normalizeRoomTeams();publishRoomRoles();
+}
+function placeBotSquads(){
+    if(selectedMode!=='br')return;
+    const groups=new Map();
+    for(const bot of aiBots){if(!bot.teamId)continue;if(!groups.has(bot.teamId))groups.set(bot.teamId,[]);groups.get(bot.teamId).push(bot);}
+    const placed=[];
+    for(const group of groups.values()){
+        const anchor={x:group[0].x,y:group[0].y};
+        for(let i=0;i<group.length;i++){
+            const bot=group[i];let point=null;
+            for(let ring=0;ring<10&&!point;ring++)for(let k=0;k<24;k++){
+                const a=(k+i*7)*Math.PI/12,r=ring===0?0:36+ring*24;
+                const x=anchor.x+Math.cos(a)*r,y=anchor.y+Math.sin(a)*r;
+                if(checkBotNavigationCollision(x,y,18)||placed.some(p=>Math.hypot(p.x-x,p.y-y)<42))continue;
+                point={x,y};break;
+            }
+            if(point){bot.x=point.x;bot.y=point.y;}
+            placed.push({x:bot.x,y:bot.y});bot._brain=null;bot._route=null;bot._doorTransit=null;bot._cornerEscape=null;
+        }
+    }
+}
+function botSquadLeader(bot){
+    if(selectedMode!=='br'||!bot.teamId)return null;
+    const humans=roomHumans().filter(p=>p.hp>0&&!p.isDead&&!isAssignedSpectator(p.id)&&areAllies(bot,p)).sort((a,b)=>a.id.localeCompare(b.id));
+    if(humans.length)return humans[0];
+    return aiBots.filter(p=>p.hp>0&&!p.isDead&&areAllies(bot,p)).sort((a,b)=>a.id.localeCompare(b.id))[0]||null;
+}
+function followBotSquad(bot,brain,diff,now,onlyRegroup=false){
+    const leader=botSquadLeader(bot);if(!leader||leader===bot)return false;
+    const distance=Math.hypot(leader.x-bot.x,leader.y-bot.y);
+    if(onlyRegroup && (distance<420 || !botHasUsableAmmo(bot)))return false;
+    if(!brain.squadPoint || now>(brain.squadUpdateAt||0)||brain.squadLeader!==leader.id){
+        brain.squadLeader=leader.id;brain.squadUpdateAt=now+600+Math.random()*350;
+        const index=parseInt(bot.id.split('_')[1])||0;
+        const base=(leader.moveAngle??leader.angle??0)+Math.PI+(index%7-3)*.42;
+        const radius=75+(index%3)*25;
+        brain.squadPoint=null;
+        for(const offset of [0,.5,-.5,1,-1,Math.PI]){
+            const point={x:leader.x+Math.cos(base+offset)*radius,y:leader.y+Math.sin(base+offset)*radius};
+            if(checkBotNavigationCollision(point.x,point.y,18))continue;
+            if(selectedMode==='br'&&Math.hypot(point.x-zone.x,point.y-zone.y)>zone.radius-30)continue;
+            brain.squadPoint=point;break;
+        }
+    }
+    if(!brain.squadPoint)return false;
+    brain.state='squad';
+    const gap=Math.hypot(bot.x-brain.squadPoint.x,bot.y-brain.squadPoint.y);
+    if(gap>45){
+        moveBotToward(bot,brain.squadPoint,(distance>280?2.7:1.8)*diff.speedMult,distance>280?'sprint':'walk');
+    }else{bot.isMoving=false;brain.movementRequested=false;bot.movementMode='walk';}
+    return true;
+}
+
+function prepareMatchTeams(){
+    const participants=[...roomHumans(),...aiBots];
+    normalizeRoomTeams(participants);participants.forEach(applyEntityTeam);
+    placeBotSquads();
+    initialTeamCount=roomTeamCount(participants);
+    initializeMatchRanks(participants);
+}
+function renderRoomRoles(){
+    const panel=document.getElementById('roomRoles');if(!panel)return;panel.replaceChildren();
+    const title=document.createElement('div');title.textContent=(isHost || globalThis.isRoomOwner)?'참가자 팀 / 관전 설정 (시작 전)':'참가자 팀 / 관전';panel.appendChild(title);
+    if(selectedMode==='br'){
+        const label=document.createElement('label');label.textContent='팀당 최대 인원 (1~16명) ';
+        const input=document.createElement('input');input.type='number';input.min='1';input.max='16';input.value=teamMaxSize;input.disabled=!(isHost || globalThis.isRoomOwner)||gameStarted;
+        input.onchange=()=>setTeamMaxSize(input.value);label.appendChild(input);panel.appendChild(label);
+        const note=document.createElement('small');note.textContent='플레이어와 봇을 같은 팀에 배정할 수 있습니다. 가득 찬 팀을 선택하면 그 팀의 봇 또는 마지막 참가자와 자리를 교환합니다.';panel.appendChild(note);
+    }
+    const roster=roomTeamRoster();
+    if(selectedMode==='br'){
+        const summary=document.createElement('div');
+        const humans=roster.filter(p=>!p.id.startsWith('bot_')&&!isAssignedSpectator(p.id)).length,bots=roster.filter(p=>p.id.startsWith('bot_')).length;
+        summary.textContent='플레이어 '+humans+'명 + 봇 '+bots+'명 ÷ 최대 '+teamMaxSize+'명 → '+roomTeamCount(roster)+'팀 (올림, 관전자 제외)';panel.appendChild(summary);
+    }
+    for(const p of roster){
+        const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;margin:8px 0';
+        const name=document.createElement('span');name.textContent=p.name;name.style.flex='1';row.appendChild(name);
+        if(selectedMode==='br'){
+            const select=document.createElement('select');select.style.width='110px';select.disabled=!(isHost || globalThis.isRoomOwner)||gameStarted||isAssignedSpectator(p.id);
+            for(let t=1;t<=roomTeamCount(roster);t++){
+                const option=document.createElement('option');option.value=t;option.textContent='팀 '+t;select.appendChild(option);
+            }
+            select.value=teamAssignments[p.id]||1;select.onchange=()=>setRoomTeam(p.id,select.value);row.appendChild(select);
+        }
+        if(!p.id.startsWith('bot_')){
+        const label=document.createElement('label');label.style.whiteSpace='nowrap';
+        const box=document.createElement('input');box.type='checkbox';box.checked=isAssignedSpectator(p.id);box.disabled=!(isHost || globalThis.isRoomOwner)||gameStarted||p.id.startsWith('bot_');
+        box.onchange=()=>setRoomSpectator(p.id,box.checked);label.appendChild(box);
+        const text=document.createElement('span');text.textContent='관전';label.appendChild(text);row.appendChild(label);
+        }
+        panel.appendChild(row);
+    }
+}
+function publishRoomRoles(){
+    if(!isHost)return;normalizeRoomTeams();
+    roomRoster=roomTeamRoster().map(p=>({id:p.id,name:p.name,isBot:p.id.startsWith('bot_')}));
+    broadcastData({type:'ROOM_ROLES',mode:selectedMode,teamMaxSize,teamAssignments,spectatorIds:[...spectatorIds],roster:roomRoster});renderRoomRoles();
+}
+function receiveRoomTeams(data){
+    if(data.mode)selectedMode=data.mode;
+    if(data.teamMaxSize)teamMaxSize=data.teamMaxSize;
+    if(data.teamAssignments)teamAssignments={...data.teamAssignments};
+    roomHumans().forEach(applyEntityTeam);
+}
+
+function enforceObserver(p){if(p && isAssignedSpectator(p.id)){p.hp=0;p.isDead=true;p.isShooting=false;p.isAiming=false;p.isMoving=false;p.weapon=null;}return p;}
+function countAliveCombatants(){
+    return [myPlayer,...Object.values(remotePlayers),...aiBots].filter(p=>p.hp>0&&!p.isDead&&!isAssignedSpectator(p.id)).length;
+}
+function updateSpectatorAliveCount(){
+    const label=document.getElementById('spectateAliveCount');
+    if(!label)return;
+    const count=String(countAliveCombatants());
+    if(label.textContent!==count)label.textContent=count;
+}
+function refreshSpectatorControls(){
+    const active=gameStarted&&!gameEnded&&(isSpectating||isRespawning);
+    document.getElementById('spectatorSwitch').style.display=active?'block':'none';
+    if(active)updateSpectatorAliveCount();
+}
+
+function generateShortId() {
+    // 방 코드는 숫자만 사용하는 4자리(1000~9999)로 생성
+    return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function onHostSettingsChange() {
+    if(!isHost) return;
+    const enabled = document.getElementById('aiToggle').value === 'true';
+    document.getElementById('aiCountGroup').style.display = enabled ? 'block' : 'none';
+    document.getElementById('aiDifficultyGroup').style.display = enabled ? 'block' : 'none';
+    if(!gameStarted)publishRoomRoles();
+
+    broadcastData({
+        type: 'ROOM_SETTINGS',
+        mode: selectedMode,
+        aiToggle: enabled,
+        aiDiff: document.getElementById('aiDifficultySelect').value,
+        aiCount: document.getElementById('aiCountInput').value,
+        mapSeed: currentMapSeed || 0
+    });
+}
+
+function updateModeSettingsUI() {
+    const mode = document.getElementById('gameModeSelect').value;
+    selectedMode=mode;
+    if(isHost&&!gameStarted)publishRoomRoles();
+    const aiInput = document.getElementById('aiCountInput');
+    const maxText = document.getElementById('maxAiText');
+    if(mode === 'normal') {
+        aiInput.max = "20";
+        if(parseInt(aiInput.value) > 20) aiInput.value = "20";
+        maxText.innerText = "20";
+    } else {
+        aiInput.max = "100";
+        maxText.innerText = "100";
+    }
+}
+document.getElementById('gameModeSelect').addEventListener('change', updateModeSettingsUI);
+
+function connectionBufferedBytes(c) {
+    const dc = c && c.dataChannel;
+    return dc && Number.isFinite(dc.bufferedAmount) ? dc.bufferedAmount : 0;
+}
+
+function safeSend(c, data) {
+    if(!c || !c.open) return false;
+    // SYNC는 다음 패킷이 곧 오므로 버퍼가 밀리면 오래된 상태를 더 쌓지 않고 건너뛴다.
+    if(data && data.type === 'SYNC') {
+        const queued = Number(c.bufferSize || 0);
+        if(connectionBufferedBytes(c) > NET_MAX_BUFFERED_BYTES || queued > NET_MAX_QUEUED_MESSAGES) return false;
+    }
+    try {
+        c.send(data);
+        return true;
+    } catch (err) {
+        console.warn('network send skipped:', err);
+        return false;
+    }
+}
+
+function installPeerReconnectHandlers(p) {
+    if(!p) return;
+    p.on('disconnected', () => {
+        // 기존 P2P 연결은 살아 있을 수 있으므로 페이지를 새로고침하지 않고
+        // PeerJS 신호 서버 연결만 다시 붙인다.
+        setTimeout(() => {
+            try {
+                if(p && !p.destroyed && p.disconnected) p.reconnect();
+            } catch (err) {
+                console.warn('peer signalling reconnect failed:', err);
+            }
+        }, 700);
+    });
+    p.on('error', err => {
+        console.warn('PeerJS:', err && (err.type || err.message || err));
+        // 게스트가 방장을 잠깐 찾지 못한 경우에도 페이지를 새로고침하지 않고 재시도한다.
+        if(!isHost && err && ['peer-unavailable','network','server-error','socket-error','disconnected'].includes(err.type)) {
+            guestConnecting=false;
+            if(guestConnectTimeout){clearTimeout(guestConnectTimeout);guestConnectTimeout=null;}
+            scheduleGuestReconnect();
+        }
+    });
+}
+
+function clearPendingDisconnect(playerId) {
+    if(!playerId) return;
+    const timer = pendingDisconnectRemoval.get(playerId);
+    if(timer) clearTimeout(timer);
+    pendingDisconnectRemoval.delete(playerId);
+}
+
+function attachHostConnection(c) {
+    c.on('open', () => {
+        connections[c.peer] = c;
+        safeSend(c, {
+            type: 'ROOM_SETTINGS',
+            mode: selectedMode,
+            aiToggle: document.getElementById('aiToggle').value === 'true',
+            aiDiff: document.getElementById('aiDifficultySelect').value,
+            aiCount: document.getElementById('aiCountInput').value,
+            mapSeed: currentMapSeed || 0
+        });
+    });
+
+    c.on('data', data => {
+        if(data && data.type==='PING') { safeSend(c,{type:'PONG',t:data.t}); return; }
+        if(data.player && data.player.id) {
+            if(!c.playerId)c.playerId = data.player.id;
+            data.player.id=c.playerId;
+            clearPendingDisconnect(c.playerId);
+        }
+        if(data.type==='LOBBY_HELLO' && data.player){
+            c.playerId=data.player.id;
+            clearPendingDisconnect(c.playerId);
+            remotePlayers[data.player.id]=data.player;
+            applyEntityTeam(remotePlayers[data.player.id]);
+            publishRoomRoles();
+            return;
+        }
+        if(c.playerId && isAssignedSpectator(c.playerId)){
+            if(data.type!=='SYNC')return;
+            if(data.player){data.player.id=c.playerId;enforceObserver(data.player);}
+        }
+        if(data.player)applyEntityTeam(data.player);
+        handleNetworkData(data);
+    });
+
+    let disconnectedHandled=false;
+    const handleDisconnect = () => {
+        if(disconnectedHandled) return;
+        disconnectedHandled=true;
+        if(connections[c.peer]===c) delete connections[c.peer];
+        const playerId=c.playerId;
+        if(!playerId) return;
+        clearPendingDisconnect(playerId);
+        // 짧은 Wi-Fi 전환/모바일 순간 끊김은 즉시 퇴장 처리하지 않고 재접속 시간을 준다.
+        const timer=setTimeout(() => {
+            const restored=Object.values(connections).some(conn=>conn && conn.open && conn.playerId===playerId);
+            if(restored) return;
+            delete remotePlayers[playerId];
+            spectatorIds.delete(playerId);
+            delete teamAssignments[playerId];
+            pendingDisconnectRemoval.delete(playerId);
+            publishRoomRoles();
+            updateHUD();
+        }, NET_RECONNECT_GRACE_MS);
+        pendingDisconnectRemoval.set(playerId,timer);
+    };
+
+    c.on('close', handleDisconnect);
+    c.on('error', err => { console.warn('guest connection error:',err); handleDisconnect(); });
+}
+
+function createRoom() {
+    const nick = document.getElementById('nicknameInput').value.trim();
+    if(nick) myPlayer.name = nick;
+    selectedMode = document.getElementById('gameModeSelect').value;
+    applyPlatformSetting(document.getElementById('platformSelect').value);
+    isHost = true;
+    spectatorIds.clear();teamAssignments={};normalizeRoomTeams();renderRoomRoles();
+
+    updateModeSettingsUI();
+
+    const code = generateShortId();
+    currentRoomCode = code;
+    document.getElementById('displayRoomCode').innerText = code;
+
+    document.getElementById('ui').style.display = 'none';
+    document.getElementById('waitingRoom').style.display = 'flex';
+    document.getElementById('waitingTitle').innerText = "대기실 (방장 설정)";
+    document.getElementById('hostSettingsControls').style.display = 'block';
+    document.getElementById('guestSettingsDisplay').style.display = 'none';
+    document.getElementById('startButton').style.display = 'block';
+    document.getElementById('guestWaitText').style.display = 'none';
+
+    peer = new Peer('gungame-room-' + code);
+    installPeerReconnectHandlers(peer);
+    peer.on('connection', attachHostConnection);
+}
+
+function setGuestConnectionUi(input) {
+    document.getElementById('ui').style.display = 'none';
+    document.getElementById('waitingRoom').style.display = 'flex';
+    document.getElementById('displayRoomCode').innerText = input;
+    document.getElementById('waitingTitle').innerText = "대기실";
+    document.getElementById('hostSettingsControls').style.display = 'none';
+    document.getElementById('guestSettingsDisplay').style.display = 'block';
+    document.getElementById('startButton').style.display = 'none';
+    document.getElementById('guestWaitText').style.display = 'block';
+}
+
+function startGuestHeartbeat() {
+    if(guestHeartbeatTimer) return;
+    lastHostMessageAt=Date.now();
+    guestHeartbeatTimer=setInterval(() => {
+        if(isHost) return;
+        if(!hostConn || !hostConn.open) { scheduleGuestReconnect(); return; }
+        const now=Date.now();
+        if(lastHostMessageAt && now-lastHostMessageAt > NET_HEARTBEAT_TIMEOUT_MS) {
+            console.warn('host heartbeat timeout - reconnecting');
+            try { hostConn.close(); } catch(e) {}
+            hostConn=null;
+            guestConnecting=false;
+            scheduleGuestReconnect();
+            return;
+        }
+        safeSend(hostConn,{type:'PING',t:now});
+    }, NET_HEARTBEAT_MS);
+}
+
+function scheduleGuestReconnect() {
+    if(isHost || !joinTargetPeerId || reconnectTimer) return;
+    reconnectAttempts++;
+    const delay=Math.min(5000, 600 * Math.pow(1.55, Math.min(reconnectAttempts-1, 6)));
+    reconnectTimer=setTimeout(() => {
+        reconnectTimer=null;
+        if(hostConn && hostConn.open) return;
+        try {
+            if(peer && !peer.destroyed && peer.disconnected) peer.reconnect();
+        } catch(e) {}
+        connectGuestToHost();
+    }, delay);
+}
+
+function connectGuestToHost() {
+    if(isHost || !peer || peer.destroyed || !joinTargetPeerId) return;
+    if(hostConn && hostConn.open) return;
+    if(guestConnecting) return;
+    guestConnecting=true;
+
+    let c;
+    try {
+        c=peer.connect(joinTargetPeerId, {serialization:'binary'});
+    } catch(err) {
+        guestConnecting=false;
+        console.warn('connect retry failed:',err);
+        scheduleGuestReconnect();
+        return;
+    }
+    hostConn=c;
+    let opened=false;
+
+    // 연결 이벤트가 영원히 안 오는 경우를 방지한다.
+    if(guestConnectTimeout) clearTimeout(guestConnectTimeout);
+    guestConnectTimeout=setTimeout(() => {
+        if(hostConn===c && !opened) {
+            try { c.close(); } catch(e) {}
+            hostConn=null;
+            guestConnecting=false;
+            scheduleGuestReconnect();
+        }
+    }, 8000);
+
+    c.on('open', () => {
+        if(hostConn!==c) return;
+        opened=true;
+        guestConnecting=false;
+        lastHostMessageAt=Date.now();
+        if(guestConnectTimeout){clearTimeout(guestConnectTimeout);guestConnectTimeout=null;}
+        reconnectAttempts=0;
+        if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+        setGuestConnectionUi(currentRoomCode);
+        safeSend(c,{type:'LOBBY_HELLO',player:networkEntityState(myPlayer)});
+        // 게임 중 재접속한 경우 현재 위치/상태도 즉시 한 번 보낸다.
+        if(gameStarted) safeSend(c,{type:'SYNC',player:networkEntityState(myPlayer)});
+        startGuestHeartbeat();
+    });
+    c.on('data', data => {
+        if(hostConn!==c) return;
+        lastHostMessageAt=Date.now();
+        if(data && data.type==='PONG') return;
+        handleNetworkData(data);
+    });
+    c.on('error', err => {
+        console.warn('host connection error:',err);
+        if(hostConn!==c) return;
+        guestConnecting=false;
+        if(guestConnectTimeout){clearTimeout(guestConnectTimeout);guestConnectTimeout=null;}
+        scheduleGuestReconnect();
+    });
+    c.on('close', () => {
+        if(hostConn===c) hostConn=null;
+        guestConnecting=false;
+        if(guestConnectTimeout){clearTimeout(guestConnectTimeout);guestConnectTimeout=null;}
+        scheduleGuestReconnect();
+    });
+}
+
+function joinRoom() {
+    const input = document.getElementById('joinIdInput').value.replace(/\D/g, '').slice(0, 4);
+    const nick = document.getElementById('nicknameInput').value.trim();
+    if(nick) myPlayer.name = nick;
+    applyPlatformSetting(document.getElementById('platformSelect').value);
+
+    if(!/^\d{4}$/.test(input)) {
+        alert("방 코드는 숫자 4자리로 입력해주세요.");
+        return;
+    }
+
+    isHost = false;
+    currentRoomCode=input;
+    joinTargetPeerId='gungame-room-' + input;
+    reconnectAttempts=0;
+    guestConnecting=false;
+    if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null;}
+    if(guestConnectTimeout){clearTimeout(guestConnectTimeout);guestConnectTimeout=null;}
+    peer = new Peer();
+    installPeerReconnectHandlers(peer);
+    peer.on('open', () => connectGuestToHost());
+}
+
+function broadcastData(data) {
+    if(isHost) {
+        Object.values(connections).forEach(c => safeSend(c,data));
+    } else if(hostConn && hostConn.open) {
+        safeSend(hostConn,data);
+    }
+}
+
+function showKillNotification() {
+    killStreakCount++;
+    if (killStreakTimer) clearTimeout(killStreakTimer);
+
+    killStreakTimer = setTimeout(() => {
+        killStreakCount = 0;
+    }, 5000);
+
+    let text = "KILL!";
+    let color = "#00ffcc";
+
+    if (killStreakCount === 2) {
+        text = "🔥 DOUBLE KILL! (더블 킬)";
+        color = "#ffcc00";
+    } else if (killStreakCount === 3) {
+        text = "⚡ TRIPLE KILL! (트리플 킬)";
+        color = "#ff8800";
+    } else if (killStreakCount >= 4) {
+        text = "👑 MEGA KILL! (메가 킬)";
+        color = "#ff4444";
+    } else {
+        text = "🎯 KILL! (적 처치)";
+    }
+
+    const notif = document.getElementById('killNotification');
+    notif.innerText = text;
+    notif.style.color = color;
+    notif.style.display = 'block';
+    notif.style.transform = 'translate(-50%, -50%) scale(1.25)';
+
+    setTimeout(() => {
+        notif.style.transform = 'translate(-50%, -50%) scale(1.0)';
+    }, 120);
+
+    if (window.killHideTimeout) clearTimeout(window.killHideTimeout);
+    window.killHideTimeout = setTimeout(() => {
+        notif.style.display = 'none';
+    }, 2000);
+}
+
+function addKill(killerId) {
+    if (killerId === myPlayer.id) {
+        myPlayer.kills++;
+        updateHUD();
+        showKillNotification();
+    } else if (remotePlayers[killerId]) {
+        remotePlayers[killerId].kills = (remotePlayers[killerId].kills || 0) + 1;
+    } else {
+        const bot = aiBots.find(b => b.id === killerId);
+        if (bot) bot.kills = (bot.kills || 0) + 1;
+    }
+
+    if (isHost) {
+        broadcastData({ type: 'KILL_EVENT', killerId: killerId });
+    }
+
+    checkDeathmatchVictory();
+}
+
+function checkDeathmatchVictory() {
+    if (selectedMode !== 'normal' || gameEnded) return;
+
+    let maxKills = myPlayer.kills;
+    for (let id in remotePlayers) {
+        if (remotePlayers[id].kills > maxKills) maxKills = remotePlayers[id].kills;
+    }
+    aiBots.forEach(b => {
+        if (b.kills > maxKills) maxKills = b.kills;
+    });
+
+    if (maxKills >= 20) {
+        triggerEndGame();
+    }
+}
+
+function handleNetworkData(data) {
+    if(data.type==='LIFE_STATE'){if(!isHost && data.player?.id===myPlayer.id)applyLocalLife(data.player);return;}
+    if(data.type==='DOOR_STATE'){if(!isHost)applyDoorState(data);return;}
+    if(data.type==='DOOR_USE'){if(isHost){const p=getCombatEntityById(data.player?.id),h=obstacles.find(o=>o.doorId===data.doorId);toggleDoorForPlayer(p,h);}return;}
+    if(data.type==='ROOM_ROLES'){
+        if(!isHost){spectatorIds=new Set(data.spectatorIds||[]);roomRoster=data.roster||[];receiveRoomTeams(data);renderRoomRoles();}return;
+    }
+    if(data.type === 'ROOM_SETTINGS') {
+        if(!isHost) {
+            const diffMap = { very_easy: '매우 쉬움', easy: '쉬움', hard: '어려움' };
+            document.getElementById('guestModeVal').innerText = data.mode === 'br' ? '배틀로얄' : '기본 모드(데스매치)';
+            document.getElementById('guestAiVal').innerText = data.aiToggle ? '포함' : '없음';
+            document.getElementById('guestDiffVal').innerText = diffMap[data.aiDiff] || data.aiDiff;
+            document.getElementById('guestCountVal').innerText = data.aiCount + "명";
+        }
+    } else if(data.type === 'RETURN_TO_ROOM') {
+            returnToRoomAfterGame();
+            return;
+        }
+        if(data.type === 'START') {
+        spectatorIds=new Set(data.spectatorIds||[]);
+        receiveRoomTeams(data);initialTeamCount=data.initialTeamCount||0;
+        selectedMode = data.mode;
+        aiDifficulty = data.aiDiff;
+        currentMapSeed = (Number(data.mapSeed ?? data.mapData?.seed) >>> 0) || 1;
+        // 방장/게스트 모두 같은 seed로 맵을 재생성한다. 전송된 mapData는 이전 버전 호환용 fallback이다.
+        const canonicalMap = generateMapData(selectedMode, currentMapSeed);
+        applyMapWorldSize(canonicalMap);
+    obstacles = canonicalMap.obstacles;
+        droppedItems = canonicalMap.items;
+        startGame();
+    } else if(data.type === 'SYNC') {
+        if(!isHost) {
+            if (data.mapSeed && (Number(data.mapSeed)>>>0) !== (Number(currentMapSeed)>>>0)) {
+                currentMapSeed = Number(data.mapSeed) >>> 0;
+                const canonicalMap = generateMapData(selectedMode, currentMapSeed);
+                applyMapWorldSize(canonicalMap);
+    obstacles = canonicalMap.obstacles;
+                // 아이템은 SYNC의 현재 상태가 권위 있으므로 아래에서 data.items로 덮어쓴다.
+            }
+            if(data.doors) data.doors.forEach(applyDoorState);
+            if(Array.isArray(data.bullets)) bullets = data.bullets;
+            zone.radius = data.zoneRadius;
+            zone.x = data.zoneX;
+            zone.y = data.zoneY;
+            zoneStage = data.zoneStage;
+            if(Number.isFinite(data.zoneTimer))zoneTimer=data.zoneTimer;
+            if(data.targetZone)targetZone=data.targetZone;
+            droppedItems = data.items || droppedItems;
+
+            let activeIds = {};
+            if (data.players) {
+                data.players.forEach(p => {
+                    if(p.id !== myPlayer.id) {
+                        applyNetworkPlayerSnapshot(p);
+                        activeIds[p.id] = true;
+                    } else {
+                        if(selectedMode==='br' && typeof p.isDowned==='boolean')applyLocalLife(p);
+                        if (!p.isDead && myPlayer.isDead && !isRespawning) {
+                            myPlayer.isDead = false;
+                            myPlayer.hp = p.hp;
+                        }
+                        myPlayer.kills = p.kills || 0;
+                        myPlayer.deaths = p.deaths || 0;
+                    }
+                });
+            }
+            for(let id in remotePlayers) {
+                if(!activeIds[id]) delete remotePlayers[id];
+            }
+
+            if (Array.isArray(data.aiBots)) {
+                applyNetworkBotSnapshots(data.aiBots, !!data.aiBotsFull);
+            }
+            const hudNow=performance.now();
+            if(hudNow-lastGuestHudAt>=150){ lastGuestHudAt=hudNow; updateHUD(); }
+            checkDeathmatchVictory();
+        } else {
+            if(data.player) {
+                const previous=remotePlayers[data.player.id];
+                if(selectedMode==='br' && previous){
+                    const locked=previous.isDowned||previous.isDead||Date.now()<(previous._lifeLockUntil||0);
+                    if(locked){
+                        Object.assign(data.player,{hp:previous.hp,isDead:previous.isDead,isDowned:!!previous.isDowned,downedUntil:previous.downedUntil,deaths:previous.deaths,kills:previous.kills,_lifeLockUntil:previous._lifeLockUntil,_downedBy:previous._downedBy,_downedHits:previous._downedHits});
+                        if(previous.isDowned||previous.isDead){data.player.x=previous.x;data.player.y=previous.y;}
+                    }
+                }
+                data.player._inputAt=Date.now();
+                remotePlayers[data.player.id] = data.player;
+            }
+        }
+    } else if(data.type === 'SHOOT') {
+        if (isHost) {
+            shoot(data.player, data.extraSpread);
+            broadcastData({ type: 'SHOOT_EVENT', player: data.player, extraSpread: data.extraSpread });
+        }
+    } else if(data.type === 'SHOOT_EVENT') {
+        if (!isHost && data.player.id !== myPlayer.id) {
+            addGunshotEvent(data.player.x, data.player.y, data.player.id);
+        }
+    } else if(data.type === 'DAMAGE' && data.targetId === myPlayer.id) {
+        myPlayer.hp = data.newHp;
+        triggerDamageEffect();
+        if(myPlayer.hp <= 0 && !myPlayer.isDead) {
+            handleMyDeath(data.attackerId);
+        }
+    } else if(data.type === 'GAME_OVER') {
+        winningTeam=data.winningTeam||null;
+        if(data.teamMaxSize)teamMaxSize=data.teamMaxSize;
+        displayRankings(data.rankings,data.totalTeams);
+    } else if(data.type === 'KILL_EVENT') {
+        if (data.killerId === myPlayer.id) {
+            myPlayer.kills++;
+            updateHUD();
+            showKillNotification();
+        } else if (remotePlayers[data.killerId]) {
+            remotePlayers[data.killerId].kills = (remotePlayers[data.killerId].kills || 0) + 1;
+        }
+    } else if(data.type === 'RESPAWN_REMAPPED') {
+        if (data.playerId === myPlayer.id && isRespawning) {
+            myPlayer.x = data.x;
+            myPlayer.y = data.y;
+            myPlayer.hp = myPlayer.maxHp;
+            myPlayer.isDead = false;
+            isRespawning = false;
+            isSpectating = false;
+            spectateTarget = null;
+
+            document.getElementById('statusHUD').style.display = 'block';
+            document.getElementById('spectateHUD').style.display = 'none';
+            if (isMobile) document.getElementById('mobileControls').style.display = 'block';
+            updateHUD();
+
+            if(selectedMode === 'normal') {
+                openDeathmatchWeaponModal();
+            }
+        }
+    } else if(data.type === 'RESPAWN_REMOTE') {
+        if (isHost) {
+            const targetP = remotePlayers[data.playerId];
+            if (targetP) {
+                const safePos = getSafeSpawnPos(100, WORLD_SIZE);
+                targetP.x = safePos.x;
+                targetP.y = safePos.y;
+                targetP.hp = targetP.maxHp;
+                targetP.isDead = false;
+
+                if(connections[data.peerId]) {
+                    connections[data.peerId].send({
+                        type: 'RESPAWN_REMAPPED',
+                        playerId: targetP.id,
+                        x: safePos.x,
+                        y: safePos.y
+                    });
+                }
+            }
+        }
+    } else if(data.type === 'PICKUP_ITEM') {
+        droppedItems = droppedItems.filter(item => item.id !== data.itemId);
+        if(isHost) broadcastData(data);
+    } else if(data.type === 'DROP_ITEM') {
+        droppedItems.push(data.item);
+        if(isHost) broadcastData(data);
+    } else if(data.type === 'WINDOW_BREAK') {
+        const house = obstacles.find(o => o.type === 'house' && Math.abs((o.seed||0) - (data.houseSeed||0)) < 1e-9);
+        if (house) {
+            house.brokenWindows = house.brokenWindows || {};
+            house.brokenWindows[data.windowId] = true;
+        }
+    } else if(data.type === 'SYNC_ITEMS') {
+        droppedItems = data.items;
+    }
+}
+
+function handleMyDeath(killerId) {
+    myPlayer.isDowned=false;myPlayer.reviveHeld=false;
+    if (myPlayer.isDead) return;
+    myPlayer.hp = 0;
+    myPlayer.isDead = true;
+    myPlayer.deaths++;
+    if (killerId) {
+        addKill(killerId);
+
+        // 데스매치 적 처치 시 보상 수급
+        if(selectedMode === 'normal') {
+            if(killerId === myPlayer.id) {
+                giveDeathmatchKillAmmo(myPlayer);
+            } else if(remotePlayers[killerId]) {
+                giveDeathmatchKillAmmo(remotePlayers[killerId]);
+            } else {
+                const bot = aiBots.find(b => b.id === killerId);
+                if(bot) giveDeathmatchKillAmmo(bot);
+            }
+        }
+    }
+    if (selectedMode === 'normal' || selectedMode === 'deathmatch' || selectedMode === 'dm') {
+        openDeathmatchWeaponModal(true);
+        startRespawnTimer(killerId);
+    } else {
+        startSpectating(killerId);
+    }
+    updateHUD();
+}
+
+function giveDeathmatchKillAmmo(p) {
+    if(p.weapon) {
+        const ammoAdd = WEAPONS[p.weapon].maxClip * 2;
+        p.reserveAmmo += ammoAdd;
+        if(p === myPlayer) updateHUD();
+    }
+}
+
+function startRespawnTimer(killerId) {
+    if(isAssignedSpectator(myPlayer.id)){startSpectating();return;}
+    isRespawning = true;
+    respawnTimerVal = 5;
+
+    document.getElementById('statusHUD').style.display = 'none';
+    if (isMobile) document.getElementById('mobileControls').style.display = 'none';
+    document.getElementById('spectateHUD').style.display = 'block';
+    document.getElementById('respawnHUD').style.display = 'block';
+    document.getElementById('respawnTimer').innerText = respawnTimerVal;
+
+    setSpectateTargetById(killerId);
+
+    if (respawnInterval) clearInterval(respawnInterval);
+    respawnInterval = setInterval(() => {
+        respawnTimerVal--;
+        document.getElementById('respawnTimer').innerText = Math.max(0, respawnTimerVal);
+
+        if (respawnTimerVal <= 0) {
+            clearInterval(respawnInterval);
+            respawnInterval = null;
+            respawnPlayer();
+        }
+    }, 1000);
+}
+
+function setSpectateTargetById(targetId) {
+    if (!targetId || targetId === myPlayer.id) {
+        findNextSpectateTarget();
+        return;
+    }
+
+    const target = spectateCandidates().find(p=>p.id===targetId);
+
+    if (target) {
+        spectateTarget = target;
+        document.getElementById('spectateTargetName').innerText = target.name;
+    } else {
+        findNextSpectateTarget();
+    }
+}
+
+function respawnPlayer() {
+    const safePos = getSafeSpawnPos(200, WORLD_SIZE);
+    myPlayer.x = safePos.x;
+    myPlayer.y = safePos.y;
+    myPlayer.hp = myPlayer.maxHp;
+    myPlayer.isDead = false;
+    isRespawning = false;
+    isSpectating = false;
+    spectateTarget = null;
+
+    // 선택하지 않았으면 AR을 기본 지급
+    if ((selectedMode === 'normal' || selectedMode === 'deathmatch' || selectedMode === 'dm') && !myPlayer.weapon) {
+        myPlayer.weapon = 'ar';
+        myPlayer.clipAmmo = WEAPONS.ar.maxClip;
+        myPlayer.reserveAmmo = WEAPONS.ar.maxClip * 4;
+    }
+
+    if (weaponSelectInterval) {
+        clearInterval(weaponSelectInterval);
+        weaponSelectInterval = null;
+    }
+    const modal = document.getElementById('weaponSelectModal');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.dataset.respawnSelect = '0';
+    }
+
+    document.getElementById('statusHUD').style.display = 'block';
+    document.getElementById('spectateHUD').style.display = 'none';
+    const respawnHUD = document.getElementById('respawnHUD');
+    if (respawnHUD) respawnHUD.style.display = 'none';
+    if (isMobile) document.getElementById('mobileControls').style.display = 'block';
+
+    if (!isHost && hostConn && hostConn.open) {
+        hostConn.send({ type: 'RESPAWN_REMOTE', playerId: myPlayer.id, peerId: myPlayer.id });
+    }
+
+    updateHUD();
+}
+
+function startSpectating(killerId) {
+    isSpectating = true;
+    document.getElementById('statusHUD').style.display = 'none';
+    if (isMobile) document.getElementById('mobileControls').style.display = 'none';
+    document.getElementById('spectateHUD').style.display = 'block';
+
+    if (killerId) {
+        setSpectateTargetById(killerId);
+    } else {
+        findNextSpectateTarget();
+    }
+}
+
+function spectateCandidates(){
+    const alive=[...Object.values(remotePlayers),...aiBots].filter(p=>p.id!==myPlayer.id&&p.hp>0&&!p.isDead&&!isAssignedSpectator(p.id)).sort((a,b)=>a.id.localeCompare(b.id));
+    if(selectedMode==='br' && !isAssignedSpectator(myPlayer.id) && (myPlayer.isDead||myPlayer.hp<=0)){
+        const teammates=alive.filter(p=>areAllies(myPlayer,p));
+        if(teammates.length)return teammates;
+    }
+    return alive;
+}
+function findNextSpectateTarget(direction=1) {
+    const list=spectateCandidates(),index=list.findIndex(p=>p.id===spectateTarget?.id);
+    spectateTarget=list.length?list[index<0?(direction<0?list.length-1:0):(index+(direction<0?-1:1)+list.length)%list.length]:null;
+    document.getElementById('spectateTargetName').innerText=spectateTarget?spectateTarget.name:'없음';
+}
+
+function hostStartGame() {
+    if (!isHost || gameStarted) return;
+
+    const startBtn = document.getElementById('startButton');
+    if (startBtn) startBtn.disabled = true;
+
+    try {
+        const modeSelect = document.getElementById('gameModeSelect');
+        if (modeSelect && modeSelect.value) selectedMode = modeSelect.value;
+
+        const aiToggleEl = document.getElementById('aiToggle');
+        const aiCountEl = document.getElementById('aiCountInput');
+        const aiDiffEl = document.getElementById('aiDifficultySelect');
+
+        const includeAi = aiToggleEl ? aiToggleEl.value === 'true' : false;
+        let aiCount = aiCountEl ? (parseInt(aiCountEl.value) || 0) : 0;
+        aiDifficulty = aiDiffEl ? aiDiffEl.value : (aiDifficulty || 'easy');
+
+        if (selectedMode === 'normal' || selectedMode === 'deathmatch' || selectedMode === 'dm') {
+            WORLD_SIZE = 2400;
+            if (aiCount > 20) aiCount = 20;
+        } else {
+            WORLD_SIZE = 12000;
+            if (aiCount > 100) aiCount = 100;
+        }
+
+        zone.x = WORLD_SIZE / 2;
+        zone.y = WORLD_SIZE / 2;
+        zone.radius = WORLD_SIZE * 0.7;
+
+        currentMapSeed = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
+
+        let mapData;
+        try {
+            mapData = generateMapData(selectedMode, currentMapSeed);
+        } catch (mapErr) {
+            console.error('map generation failed', mapErr);
+            // 데스매치 최소 안전 맵 fallback
+            if (selectedMode === 'normal' || selectedMode === 'deathmatch' || selectedMode === 'dm') {
+                mapData = { seed: currentMapSeed, worldSize: 2400, obstacles: [], items: [] };
+            } else {
+                throw mapErr;
+            }
+        }
+
+        if (typeof applyMapWorldSize === 'function') applyMapWorldSize(mapData);
+        obstacles = Array.isArray(mapData.obstacles) ? mapData.obstacles : [];
+        droppedItems = Array.isArray(mapData.items) ? mapData.items : [];
+
+        if (includeAi && aiCount > 0) {
+            spawnAIBots(aiCount);
+        } else {
+            aiBots.length = 0;
+        }
+
+        roomHumans().forEach(p=>{p.kills=0;p.deaths=0;resetDownedState(p);if(!isAssignedSpectator(p.id)){p.hp=p.maxHp||200;p.isDead=false;}});
+        prepareMatchTeams();
+        broadcastData({
+            type: 'START',
+            spectatorIds:[...spectatorIds],
+            teamMaxSize,teamAssignments,initialTeamCount,
+            mode: selectedMode,
+            aiDiff: aiDifficulty,
+            mapSeed: currentMapSeed
+        });
+
+        Object.values(remotePlayers).forEach(enforceObserver);
+        startGame();
+    } catch (err) {
+        console.error('hostStartGame error', err);
+        if (startBtn) startBtn.disabled = false;
+        alert('게임 시작 중 오류가 발생했습니다. 다시 시도해 주세요.');
+    }
+}
+
+
+function getRandomBotSpawnNearHouse(botIndex = 0) {
+    const houses = obstacles.filter(o => o && o.type === 'house');
+    if (!houses.length) return getSafeSpawnPos(100, WORLD_SIZE);
+
+    const rand = createSeededRandom(hashSeed((currentMapSeed || 1) + 0x9e3779b9 + botIndex * 2654435761));
+    for (let attempt = 0; attempt < 80; attempt++) {
+        const house = houses[Math.floor(rand() * houses.length)];
+        const side = Math.floor(rand() * 4);
+        const gap = 70 + rand() * 150;
+        let x, y;
+
+        if (side === 0) { // 위쪽
+            x = house.x + 35 + rand() * Math.max(10, house.w - 70);
+            y = house.y - gap;
+        } else if (side === 1) { // 오른쪽
+            x = house.x + house.w + gap;
+            y = house.y + 35 + rand() * Math.max(10, house.h - 70);
+        } else if (side === 2) { // 아래쪽
+            x = house.x + 35 + rand() * Math.max(10, house.w - 70);
+            y = house.y + house.h + gap;
+        } else { // 왼쪽
+            x = house.x - gap;
+            y = house.y + 35 + rand() * Math.max(10, house.h - 70);
+        }
+
+        x = Math.max(45, Math.min(WORLD_SIZE - 45, x));
+        y = Math.max(45, Math.min(WORLD_SIZE - 45, y));
+        if (!checkObstacleCollision(x, y, 20)) return {x, y};
+    }
+    return getSafeSpawnPos(100, WORLD_SIZE);
+}
+
+
+function getDeathmatchSpawnPoint(index=0) {
+    const margin = 180;
+    const pts = [
+        {x:margin,y:margin},
+        {x:WORLD_SIZE-margin,y:margin},
+        {x:margin,y:WORLD_SIZE-margin},
+        {x:WORLD_SIZE-margin,y:WORLD_SIZE-margin},
+        {x:WORLD_SIZE/2,y:margin},
+        {x:WORLD_SIZE/2,y:WORLD_SIZE-margin},
+        {x:margin,y:WORLD_SIZE/2},
+        {x:WORLD_SIZE-margin,y:WORLD_SIZE/2}
+    ];
+    return pts[index % pts.length];
+}
+
+function spawnAIBots(count) {
+    aiBots.length = 0;
+    for (let i = 0; i < count; i++) {
+        // 모든 모드에서 봇은 집 근처의 안전한 위치에 랜덤 스폰한다.
+        // currentMapSeed + bot index를 사용해 방장 기준으로 항상 재현 가능하게 만든다.
+        let spawnPos = getRandomBotSpawnNearHouse(i);
+
+        const botObj = {
+            id: 'bot_' + i,
+            x: spawnPos.x,
+            y: spawnPos.y,
+            angle: Math.random() * Math.PI * 2, hp: 200, maxHp: 200,
+            kills: 0, deaths: 0,
+            isDead: false,
+            name: `AI 봇_${i+1}`,
+            weapon: null, clipAmmo: 0, reserveAmmo: 100,
+            equippedScope: null,
+            equippedHelmet: null,
+            equippedBodyArmor: null,
+            lastShootTime: 0,
+            targetItem: null,
+            firstSeenTime: null,
+            investigateTarget: null,
+            movementMode: 'walk', isMoving: false, stuckFrames: 0, avoidDir: Math.random() < .5 ? -1 : 1,
+            _brain: null
+        };
+
+        if(selectedMode === 'normal') {
+            const wKeys = ['ar', 'shotgun', 'sniper'];
+            const wType = wKeys[Math.floor(Math.random() * wKeys.length)];
+            botObj.weapon = wType;
+            botObj.clipAmmo = WEAPONS[wType].maxClip;
+            botObj.reserveAmmo = WEAPONS[wType].maxClip * 4;
+        }
+
+        aiBots.push(botObj);
+    }
+}
+
+function startGame() {
+    if(window._returnMenuTimer){clearTimeout(window._returnMenuTimer);window._returnMenuTimer=null;}
+    if (typeof drawFogOfWar === 'function') {
+        drawFogOfWar._lastBuild = 0;
+        drawFogOfWar._buildCameraX = camera ? camera.x : 0;
+        drawFogOfWar._buildCameraY = camera ? camera.y : 0;
+    }
+    drawFogOfWar._startAt=performance.now(); drawFogOfWar._lastAt=0;
+    document.getElementById('ui').style.display = 'none';
+    document.getElementById('waitingRoom').style.display = 'none';
+    document.getElementById('statusHUD').style.display = 'block';
+
+    if (selectedMode === 'normal') {
+        WORLD_SIZE = 2400;
+    } else {
+        WORLD_SIZE = 12000;
+    }
+    zone.x = WORLD_SIZE / 2;
+    zone.y = WORLD_SIZE / 2;
+    zone.radius = WORLD_SIZE * 0.7;
+
+    document.getElementById('victoryOverlay').style.display='none';
+    footstepEvents.length=0;footstepTracks.clear();
+    resetDownedState(myPlayer);reviveSessions.clear();
+    myPlayer.hp = myPlayer.maxHp;
+    myPlayer.isDead = false;
+    myPlayer.kills = 0;
+    myPlayer.deaths = 0;
+    myPlayer.weapon = null;
+    myPlayer.equippedHelmet = null;
+    myPlayer.equippedBodyArmor = null;
+    myPlayer.inventory = { scopes: [], armors: [], healing: {bandage:0,medkit:0} };
+    isSpectating = false;
+    isRespawning = false;
+    gameEnded = false;
+    winningTeam=null;applyEntityTeam(myPlayer);
+
+    if (isMobile) {
+        document.getElementById('mobileControls').style.display = 'block';
+        document.getElementById('hudControlsHint').style.display = 'none';
+        initMobileControls();
+    }
+
+    document.getElementById('hudGameMode').innerText = selectedMode === 'br' ? "배틀로얄" : "기본 모드";
+    if (selectedMode !== 'br') {
+        document.getElementById('hudZoneContainer').style.display = 'none';
+    } else {
+        document.getElementById('hudZoneContainer').style.display = 'inline';
+    }
+
+    initialPlayerCount = aiBots.length + [myPlayer,...Object.values(remotePlayers)].filter(p=>!isAssignedSpectator(p.id)).length;
+
+    canvas.style.display = 'block';
+    minimapCanvas.style.display = 'block';
+    gameStarted = true;
+    const desktopSettingsBtn = document.getElementById('desktopGameSettings');
+    if (desktopSettingsBtn) desktopSettingsBtn.style.display = isMobile ? 'none' : 'flex';
+
+    if(selectedMode === 'br') {
+        startSpawnSelectionPhase();
+    } else {
+        const safePos = getSafeSpawnPos(100, WORLD_SIZE);
+        myPlayer.x = safePos.x;
+        myPlayer.y = safePos.y;
+        camera.x = myPlayer.x;
+        camera.y = myPlayer.y;
+        if(!isAssignedSpectator(myPlayer.id))openDeathmatchWeaponModal();
+    }
+
+    if(isAssignedSpectator(myPlayer.id)){
+        enforceObserver(myPlayer);
+        startSpectating();
+        document.getElementById('fullMapOverlay').style.display='none';
+        document.getElementById('spawnSelectHUD').style.display='none';
+    }
+    refreshSpectatorControls();
+    updateHUD();
+    resizeCanvas();
+    initEvents();
+    gameLoop();
+}
+
+// 1. 배틀로얄 스폰 위치 선택 단계 (10초)
+function startSpawnSelectionPhase() {
+    isSpawnSelecting = true;
+    hasSelectedSpawn = false;
+    spawnTimerVal = 10;
+
+    const spawnHUD = document.getElementById('spawnSelectHUD');
+    spawnHUD.style.display = 'block';
+    document.getElementById('spawnTimer').innerText = spawnTimerVal;
+
+    document.getElementById('mapNoticeText').innerText = "클릭하여 스폰 위치 선택";
+    document.getElementById('fullMapOverlay').style.display = 'flex';
+
+    if (spawnTimerInterval) clearInterval(spawnTimerInterval);
+    spawnTimerInterval = setInterval(() => {
+        spawnTimerVal--;
+        document.getElementById('spawnTimer').innerText = spawnTimerVal;
+        if(spawnTimerVal <= 0) {
+            endSpawnSelectionPhase();
+        }
+    }, 1000);
+}
+
+function handleMapClick(e) {
+    if(isSpawnSelecting && !hasSelectedSpawn) {
+        const rect = fullMapCanvas.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+        if(clickX >= 0 && clickX <= fullMapCanvas.width && clickY >= 0 && clickY <= fullMapCanvas.height) {
+            const mapX = (clickX / fullMapCanvas.width) * WORLD_SIZE;
+            const mapY = (clickY / fullMapCanvas.height) * WORLD_SIZE;
+            myPlayer.x = mapX;
+            myPlayer.y = mapY;
+            camera.x = myPlayer.x;
+            camera.y = myPlayer.y;
+            hasSelectedSpawn = true;
+            endSpawnSelectionPhase();
+        }
+    } else if(!isSpawnSelecting) {
+        toggleFullMap();
+    }
+}
+
+function endSpawnSelectionPhase() {
+    if(!isSpawnSelecting) return;
+    isSpawnSelecting = false;
+    if(spawnTimerInterval) clearInterval(spawnTimerInterval);
+
+    document.getElementById('spawnSelectHUD').style.display = 'none';
+    document.getElementById('fullMapOverlay').style.display = 'none';
+    document.getElementById('mapNoticeText').innerText = "터치하여 닫기";
+
+    if(!hasSelectedSpawn) {
+        const edgePos = getEdgeRandomSpawnPos(500, WORLD_SIZE);
+        myPlayer.x = edgePos.x;
+        myPlayer.y = edgePos.y;
+        camera.x = myPlayer.x;
+        camera.y = myPlayer.y;
+    }
+
+    startBattleRoyaleZoneLogic();
+}
+
+// 1. 배틀로얄 무작위 위치 무작위 자기장 축소 시스템
+function startBattleRoyaleZoneLogic() {
+    zoneStage = 1;
+    zoneTimer = 60;
+    isZoneShrinking = false;
+    zone.x = WORLD_SIZE / 2;
+    zone.y = WORLD_SIZE / 2;
+    zone.radius = WORLD_SIZE * 0.7;
+
+    setupNextZoneTarget();
+
+    if(zoneTimerInterval) clearInterval(zoneTimerInterval);
+    zoneTimerInterval = setInterval(() => {
+        if(!gameStarted || gameEnded || selectedMode !== 'br' || isSpawnSelecting) return;
+
+        if(zoneTimer > 0) {
+            zoneTimer--;
+            document.getElementById('hudZoneTimer').innerText = zoneTimer;
+        } else {
+            isZoneShrinking = true;
+            document.getElementById('hudZoneTimer').innerText = "축소 중!";
+        }
+    }, 1000);
+}
+
+function setupNextZoneTarget() {
+    const nextRadius = zone.radius * 0.55;
+    const maxOffset = zone.radius - nextRadius;
+    const angle = Math.random() * Math.PI * 2;
+    const dist = Math.random() * maxOffset * 0.8;
+
+    targetZone = {
+        x: zone.x + Math.cos(angle) * dist,
+        y: zone.y + Math.sin(angle) * dist,
+        radius: nextRadius
+    };
+}
+
+// 2. 데스매치 총기 선택 모달 (10초)
+function openDeathmatchWeaponModal(duringRespawn = false) {
+    if(isAssignedSpectator(myPlayer.id))return;
+    weaponSelectTimerVal = duringRespawn ? 5 : 10;
+    const modal = document.getElementById('weaponSelectModal');
+    if (!modal) return;
+
+    modal.dataset.respawnSelect = duringRespawn ? '1' : '0';
+    modal.style.display = 'flex';
+
+    const timerEl = document.getElementById('weaponSelectTimer');
+    if (timerEl) timerEl.innerText = weaponSelectTimerVal;
+
+    if (weaponSelectInterval) clearInterval(weaponSelectInterval);
+    weaponSelectInterval = setInterval(() => {
+        weaponSelectTimerVal--;
+        if (timerEl) timerEl.innerText = Math.max(0, weaponSelectTimerVal);
+
+        if (weaponSelectTimerVal <= 0) {
+            clearInterval(weaponSelectInterval);
+            weaponSelectInterval = null;
+
+            // 처음 시작 선택창은 시간 종료 시 AR 자동 선택.
+            // 사망 후 선택창은 리스폰 시점에서 자동으로 닫는다.
+            if (!duringRespawn && !myPlayer.weapon) {
+                selectDeathmatchWeapon('ar');
+            }
+        }
+    }, 1000);
+}
+
+function selectDeathmatchWeapon(type) {
+    if (!WEAPONS[type]) return;
+
+    myPlayer.weapon = type;
+    myPlayer.clipAmmo = WEAPONS[type].maxClip;
+    myPlayer.reserveAmmo = WEAPONS[type].maxClip * 4;
+
+    const modal = document.getElementById('weaponSelectModal');
+    const choosingForRespawn = !!(modal && modal.dataset.respawnSelect === '1' && isRespawning);
+
+    if (!choosingForRespawn) {
+        if (weaponSelectInterval) {
+            clearInterval(weaponSelectInterval);
+            weaponSelectInterval = null;
+        }
+        if (modal) {
+            modal.style.display = 'none';
+            modal.dataset.respawnSelect = '0';
+        }
+    }
+
+    updateHUD();
+}
+
+let gameEventsBound=false;
+function initEvents() {
+    if(gameEventsBound)return;gameEventsBound=true;
+    window.addEventListener('keydown', e => {
+        if (isSpectating || isRespawning) return;
+        keys[e.key.toLowerCase()] = true;
+        if(e.key === 'Shift') keys['shift'] = true;
+        if(e.key === 'Control') keys['control'] = true;
+        if(e.key === 'Tab') { e.preventDefault(); toggleInventory(); }
+        if(e.key.toLowerCase() === 'm') toggleFullMap();
+        if(e.key.toLowerCase() === 'f' && !e.repeat){if(nearestDownedAlly(myPlayer))myPlayer.reviveHeld=true;else interactDoor();}
+        if(e.key.toLowerCase() === 'e' && !e.repeat) pickupItem();
+        if(e.key.toLowerCase() === 'r') reloadWeapon(myPlayer);
+    });
+    window.addEventListener('keyup', e => {
+        if (isSpectating || isRespawning) return;
+        keys[e.key.toLowerCase()] = false;
+        if(e.key === 'Shift') keys['shift'] = false;
+        if(e.key === 'Control') keys['control'] = false;
+        if(e.key.toLowerCase()==='f')myPlayer.reviveHeld=false;
+    });
+    canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = (e.clientX - rect.left)*canvas.width/rect.width;
+        mouse.y = (e.clientY - rect.top)*canvas.height/rect.height;
+    });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    canvas.addEventListener('mousedown', e => {
+        if (isSpectating || isRespawning) {
+            if (e.button === 0) findNextSpectateTarget();
+            return;
+        }
+        if (e.button === 2) myPlayer.isAiming = true;
+        if (e.button === 0) myPlayer.isShooting = true;
+    });
+    canvas.addEventListener('mouseup', e => {
+        if (isSpectating || isRespawning) return;
+        if (e.button === 2) myPlayer.isAiming = false;
+        if (e.button === 0) myPlayer.isShooting = false;
+    });
+}
+
+window.addEventListener('blur',()=>{myPlayer.reviveHeld=false;});
+function initMobileControls() {
+    if (mobileControlsInitialized) return;
+    mobileControlsInitialized = true;
+    const moveArea = document.getElementById('moveTouchArea');
+    const joyContainer = document.getElementById('joystickContainer');
+    const joyKnob = document.getElementById('joystickKnob');
+    let joyTouchId = null, joyCenter = {x:0, y:0};
+
+    moveArea.addEventListener('touchstart', e => {
+        if(isEditingKeys || isSpectating || isRespawning || joyTouchId !== null) return;
+        const touch = e.changedTouches[0];
+        joyTouchId = touch.identifier;
+
+        const rect = gameFrame.getBoundingClientRect();
+        joyCenter = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+
+        joyContainer.style.left = joyCenter.x + 'px';
+        joyContainer.style.top = joyCenter.y + 'px';
+        joyContainer.style.display = 'block';
+
+        updateJoystick(touch);
+    });
+
+    window.addEventListener('touchmove', e => {
+        if(isEditingKeys || isSpectating || isRespawning) return;
+        for (let t of e.changedTouches) {
+            if (t.identifier === joyTouchId) updateJoystick(t);
+        }
+    });
+
+    const resetJoy = e => {
+        for (let t of e.changedTouches) {
+            if (t.identifier === joyTouchId) {
+                joyTouchId = null;
+                mobileMoveVec = { x: 0, y: 0 };
+                joyContainer.style.display = 'none';
+                joyKnob.style.top = '45px'; joyKnob.style.left = '45px';
+            }
+        }
+    };
+    window.addEventListener('touchend', resetJoy);
+    window.addEventListener('touchcancel', resetJoy);
+
+    function updateJoystick(touch) {
+        const rect = gameFrame.getBoundingClientRect();
+        let currentX = touch.clientX - rect.left;
+        let currentY = touch.clientY - rect.top;
+
+        let dx = currentX - joyCenter.x;
+        let dy = currentY - joyCenter.y;
+        let dist = Math.hypot(dx, dy);
+        let maxDist = 45;
+        if (dist > maxDist) { dx = (dx / dist) * maxDist; dy = (dy / dist) * maxDist; }
+        joyKnob.style.left = (45 + dx) + 'px';
+        joyKnob.style.top = (45 + dy) + 'px';
+        mobileMoveVec = { x: dx / maxDist, y: dy / maxDist };
+    }
+
+    const aimArea = document.getElementById('aimTouchArea');
+    const aimPad = document.getElementById('aimPadContainer');
+    const aimKnob = document.getElementById('aimPadKnob');
+    let aimTouchId = null, aimCenter = {x:0, y:0};
+
+    aimArea.addEventListener('touchstart', e => {
+        if(isEditingKeys || isSpectating || isRespawning || aimTouchId !== null) return;
+        const touch = e.changedTouches[0];
+        aimTouchId = touch.identifier;
+
+        const rect = gameFrame.getBoundingClientRect();
+        aimCenter = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+
+        aimPad.style.left = aimCenter.x + 'px';
+        aimPad.style.top = aimCenter.y + 'px';
+        aimPad.style.display = 'block';
+
+        updateAim(touch);
+        myPlayer.isAiming = true;
+
+
+    });
+
+    window.addEventListener('touchmove', e => {
+        if(isEditingKeys || isSpectating || isRespawning) return;
+        for (let t of e.changedTouches) {
+            if (t.identifier === aimTouchId) updateAim(t);
+        }
+    });
+
+    const resetAim = e => {
+        for (let t of e.changedTouches) {
+            if (t.identifier === aimTouchId) {
+                aimTouchId = null;
+
+                mobileAimVec = { x: 0, y: 0 };
+                aimPad.style.display = 'none';
+                aimKnob.style.top = '45px'; aimKnob.style.left = '45px';
+                myPlayer.isAiming = false;
+            }
+        }
+    };
+    window.addEventListener('touchend', resetAim);
+    window.addEventListener('touchcancel', resetAim);
+
+    function updateAim(touch) {
+        const rect = gameFrame.getBoundingClientRect();
+        let currentX = touch.clientX - rect.left;
+        let currentY = touch.clientY - rect.top;
+
+        let dx = currentX - aimCenter.x;
+        let dy = currentY - aimCenter.y;
+        let dist = Math.hypot(dx, dy);
+        let maxDist = 45;
+        if (dist > maxDist) { dx = (dx / dist) * maxDist; dy = (dy / dist) * maxDist; }
+        aimKnob.style.left = (45 + dx) + 'px';
+        aimKnob.style.top = (45 + dy) + 'px';
+        mobileAimVec = { x: dx / maxDist, y: dy / maxDist };
+    }
+
+    // Aim and fire have separate touch identities. Releasing aim never fires a shot.
+    const fireButton=document.getElementById('btnFire');
+    let fireTouchId=null;
+    const stopFire=()=>{fireTouchId=null;myPlayer.isShooting=false;fireButton.classList.remove('active');};
+    fireButton.addEventListener('touchstart',e=>{
+        if(isEditingKeys||isSpectating||isRespawning||myPlayer.isDead||myPlayer.isDowned||fireTouchId!==null)return;
+        e.preventDefault();e.stopPropagation();fireTouchId=e.changedTouches[0].identifier;
+        myPlayer.isShooting=true;fireButton.classList.add('active');
+    },{passive:false});
+    const releaseFire=e=>{for(const t of e.changedTouches)if(t.identifier===fireTouchId)stopFire();};
+    window.addEventListener('touchend',releaseFire);
+    window.addEventListener('touchcancel',releaseFire);
+    window.addEventListener('blur',stopFire);
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)stopFire();});
+
+    document.getElementById('btnReload').addEventListener('touchstart', (e) => { if(!isEditingKeys && !isSpectating && !isRespawning){ e.preventDefault(); reloadWeapon(myPlayer); } });
+    const reviveButton=document.getElementById('btnRevive');
+    reviveButton.addEventListener('touchstart',e=>{if(!isEditingKeys){e.preventDefault();myPlayer.reviveHeld=!!nearestDownedAlly(myPlayer);}},{passive:false});
+    for(const event of ['touchend','touchcancel'])reviveButton.addEventListener(event,()=>{myPlayer.reviveHeld=false;});
+    document.getElementById('btnDoor').addEventListener('touchstart',e=>{if(!isEditingKeys){e.preventDefault();interactDoor();}},{passive:false});
+    document.getElementById('btnPickup').addEventListener('touchstart', (e) => { if(!isEditingKeys && !isSpectating && !isRespawning){ e.preventDefault(); pickupItem(); } });
+    document.getElementById('btnBag').addEventListener('touchstart', (e) => { if(!isEditingKeys && !isSpectating && !isRespawning){ e.preventDefault(); toggleInventory(); } });
+    document.getElementById('btnMap').addEventListener('touchstart', (e) => { if(!isEditingKeys && !isSpectating && !isRespawning){ e.preventDefault(); toggleFullMap(); } });
+    const sprintBtn = document.getElementById('btnSprint');
+    if (sprintBtn && !sprintBtn.dataset.boundSprint) {
+        sprintBtn.dataset.boundSprint='1';
+        const startSprint=(e)=>{ if(!isEditingKeys&&!isSpectating&&!isRespawning){ e.preventDefault(); mobileSprintHeld=true; sprintBtn.classList.add('active'); } };
+        const stopSprint=(e)=>{ mobileSprintHeld=false; sprintBtn.classList.remove('active'); };
+        sprintBtn.addEventListener('touchstart',startSprint,{passive:false});
+        sprintBtn.addEventListener('touchend',stopSprint,{passive:false});
+        sprintBtn.addEventListener('touchcancel',stopSprint,{passive:false});
+        sprintBtn.addEventListener('pointerdown',startSprint);
+        window.addEventListener('pointerup',stopSprint);
+    }
+}
+
+function toggleFullMap() {
+    const fMap = document.getElementById('fullMapOverlay');
+    fMap.style.display = (fMap.style.display === 'flex') ? 'none' : 'flex';
+}
+
+function toggleInventory() {
+    if (isSpectating || isRespawning) return;
+    const inv = document.getElementById('inventory');
+    inv.style.display = (inv.style.display === 'flex') ? 'none' : 'flex';
+    if(inv.style.display === 'flex') renderInventory();
+}
+
+// 모바일 가방 스크롤: 게임 조작 터치 이벤트로 전파되지 않게 하고 브라우저의 세로 스크롤은 허용한다.
+(function enableMobileInventoryScroll(){
+    const inv = document.getElementById('inventory');
+    if (!inv || inv.dataset.touchScrollBound === '1') return;
+    inv.dataset.touchScrollBound = '1';
+    ['touchstart','touchmove','touchend','touchcancel','pointerdown','pointermove','pointerup'].forEach(type => {
+        inv.addEventListener(type, (e) => {
+            e.stopPropagation();
+        }, { passive: true });
+    });
+    inv.addEventListener('wheel', e => e.stopPropagation(), { passive: true });
+})();
+
+
+function isMedkitItemType(type) {
+    return type === 'medkit' || type === 'firstaid' || type === 'first_aid' || type === 'med_kit';
+}
+
+function healingInventory() {
+    const inv=myPlayer.inventory;
+    if(!inv.healing)inv.healing={bandage:0,medkit:0};
+    // 이전 버전에서 배율 목록에 잘못 들어간 회복 아이템도 복구한다.
+    inv.scopes=(inv.scopes||[]).filter(type=>{
+        if(type==='bandage'||isMedkitItemType(type)){const key=type==='bandage'?'bandage':'medkit';inv.healing[key]=(inv.healing[key]||0)+1;return false;}
+        return !!SCOPES[type];
+    });
+    return inv.healing;
+}
+function useHealingItem(type){
+    if(myPlayer.isDowned)return;
+    if(!['bandage','medkit'].includes(type) || myPlayer.hp<=0 || myPlayer.isDead || isSpectating || gameEnded)return;
+    const bag=healingInventory();if(!bag[type] || myPlayer.hp>=myPlayer.maxHp)return;
+    bag[type]--;myPlayer.hp=Math.min(myPlayer.maxHp,myPlayer.hp+(type==='bandage'?20:60));
+    updateHUD();renderInventory();
+}
+function renderInventory() {
+    const healing=healingInventory(),list=document.getElementById('healingList');
+    list.replaceChildren();
+    for(const type of ['bandage','medkit']){
+        const button=document.createElement('button');
+        button.textContent=(type==='bandage'?'붕대':'구급상자')+' × '+(healing[type]||0)+' · 사용';
+        button.disabled=!healing[type]||myPlayer.hp>=myPlayer.maxHp;
+        button.onclick=()=>useHealingItem(type);list.appendChild(button);
+    }
+    const inventoryDisplayName = (type) => {
+        if (isMedkitItemType(type)) return '구급상자';
+        return type;
+    };
+
+    const weapArea = document.getElementById('equippedWeaponArea');
+    const armorArea = document.getElementById('equippedArmorArea');
+    const armorList = document.getElementById('armorList');
+    const scopeArea = document.getElementById('equippedScopeArea');
+    const scopeList = document.getElementById('scopeList');
+
+    weapArea.innerHTML = myPlayer.weapon
+        ? `${WEAPONS[myPlayer.weapon].name} <button style="width:auto; padding:2px 8px; margin-left:10px;" onclick="unequipWeapon()">해제(버리기)</button>`
+        : "맨손";
+
+    let helmetText = myPlayer.equippedHelmet ? ARMORS[myPlayer.equippedHelmet].name : "없음";
+    let bodyText = myPlayer.equippedBodyArmor ? ARMORS[myPlayer.equippedBodyArmor].name : "없음";
+    armorArea.innerHTML = `머리: ${helmetText} | 몸: ${bodyText}`;
+
+    armorList.innerHTML = "";
+    if(!myPlayer.inventory.armors) myPlayer.inventory.armors = [];
+    myPlayer.inventory.armors.forEach(armKey => {
+        const item = document.createElement('div');
+        item.className = 'inv-item';
+        item.innerText = ARMORS[armKey].name;
+        item.onclick = () => equipArmor(armKey);
+        armorList.appendChild(item);
+    });
+
+    scopeArea.innerHTML = myPlayer.equippedScope
+        ? `${SCOPES[myPlayer.equippedScope].name} <button style="width:auto; padding:2px 8px; margin-left:10px;" onclick="unequipScope()">해제</button>`
+        : "없음";
+
+    scopeList.innerHTML = "";
+    myPlayer.inventory.scopes.forEach(sc => {
+        const item = document.createElement('div');
+        item.className = 'inv-item';
+        item.innerText = SCOPES[sc].name;
+        item.onclick = () => equipScope(sc);
+        scopeList.appendChild(item);
+    });
+}
+
+function equipArmor(armKey) {
+    const arm = ARMORS[armKey];
+    if(arm.type === 'helmet') {
+        if(myPlayer.equippedHelmet) myPlayer.inventory.armors.push(myPlayer.equippedHelmet);
+        myPlayer.equippedHelmet = armKey;
+    } else if(arm.type === 'body') {
+        if(myPlayer.equippedBodyArmor) myPlayer.inventory.armors.push(myPlayer.equippedBodyArmor);
+        myPlayer.equippedBodyArmor = armKey;
+    }
+
+    const idx = myPlayer.inventory.armors.indexOf(armKey);
+    if(idx !== -1) myPlayer.inventory.armors.splice(idx, 1);
+
+    updateHUD();
+    renderInventory();
+}
+
+function unequipWeapon() {
+    if(myPlayer.weapon) {
+        if(selectedMode !== 'normal') {
+            const newItem = {
+                id: 'item_' + Math.random().toString(36).substring(2, 9),
+                x: myPlayer.x,
+                y: myPlayer.y,
+                type: myPlayer.weapon
+            };
+            droppedItems.push(newItem);
+            broadcastData({ type: 'DROP_ITEM', item: newItem });
+        }
+
+        myPlayer.weapon = null;
+        myPlayer.equippedScope = null;
+        myPlayer.clipAmmo = 0;
+        updateHUD();
+        renderInventory();
+    }
+}
+
+function equipScope(scKey) {
+    if(!myPlayer.weapon) {
+        alert("총기를 먼저 장착해야 스코프를 사용할 수 있습니다!");
+        return;
+    }
+    myPlayer.equippedScope = scKey;
+    updateHUD();
+    renderInventory();
+}
+
+function unequipScope() { myPlayer.equippedScope = null; updateHUD(); renderInventory(); }
+
+function reloadWeapon(p) {
+    if(!p.weapon || p.isReloading) return;
+    const maxClip = WEAPONS[p.weapon].maxClip;
+    const needed = maxClip - p.clipAmmo;
+    if(needed <= 0 || p.reserveAmmo <= 0) return;
+
+    p.isReloading = true;
+    p.reloadStartedAt = Date.now();
+    setTimeout(() => {
+        const load = Math.min(needed, p.reserveAmmo);
+        p.clipAmmo += load;
+        p.reserveAmmo -= load;
+        p.isReloading = false;
+        p.reloadStartedAt = 0;
+        if(p === myPlayer) updateHUD();
+    }, 1500);
+}
+
+function pickupItem() {
+    if(myPlayer.isDowned)return;
+    if (myPlayer.hp <= 0) return;
+    for(let i = droppedItems.length - 1; i >= 0; i--) {
+        const item = droppedItems[i];
+        if(Math.hypot(myPlayer.x - item.x, myPlayer.y - item.y) < 50) {
+            if(['ar', 'sniper', 'shotgun'].includes(item.type)) {
+                if(myPlayer.weapon) {
+                    const dropWeaponItem = {
+                        id: 'item_' + Math.random().toString(36).substring(2, 9),
+                        x: myPlayer.x, y: myPlayer.y, type: myPlayer.weapon
+                    };
+                    droppedItems.push(dropWeaponItem);
+                    broadcastData({ type: 'DROP_ITEM', item: dropWeaponItem });
+                }
+                myPlayer.weapon = item.type;
+                myPlayer.clipAmmo = WEAPONS[item.type].maxClip;
+                myPlayer.reserveAmmo += WEAPONS[item.type].maxClip * 2;
+            } else if(item.type.startsWith('ammo_')) {
+                myPlayer.reserveAmmo += 30;
+            } else if(ARMORS[item.type]) {
+                if(!myPlayer.inventory.armors) myPlayer.inventory.armors = [];
+                myPlayer.inventory.armors.push(item.type);
+            } else if(item.type==='bandage'||isMedkitItemType(item.type)){
+                const bag=healingInventory(),key=item.type==='bandage'?'bandage':'medkit';bag[key]=(bag[key]||0)+1;
+            } else if(SCOPES[item.type]) {
+                myPlayer.inventory.scopes.push(item.type);
+            }
+
+            broadcastData({ type: 'PICKUP_ITEM', itemId: item.id });
+            droppedItems.splice(i, 1);
+            updateHUD();renderInventory();
+            break;
+        }
+    }
+}
+
+function initializeMatchRanks(participants){
+    matchHumans.clear();matchTeamRanks.clear();
+    for(const p of participants){
+        if(isAssignedSpectator(p.id))continue;
+        const team=p.teamId||p.id;
+        matchTeamRanks.set(team,null);
+        if(!isBotEntity(p))matchHumans.set(p.id,{id:p.id,name:p.name,teamId:team,kills:0,deaths:0});
+    }
+}
+function recordMatchRanks(){
+    if(!isHost || !gameStarted || isSpawnSelecting || gameEnded)return;
+    for(const p of roomHumans()){
+        const saved=matchHumans.get(p.id);
+        if(saved){saved.name=p.name;saved.kills=p.kills||0;saved.deaths=p.deaths||0;}
+    }
+    if(selectedMode!=='br')return;
+    const alive=new Set(aliveTeamKeys());
+    const remaining=[...matchTeamRanks].filter(([,rank])=>rank===null);
+    for(const [team] of remaining)if(!alive.has(team))matchTeamRanks.set(team,remaining.length);
+}
+function buildHumanRankings(){
+    const rows=[...matchHumans.values()].map(p=>({...p,rank:selectedMode==='br'?(matchTeamRanks.get(p.teamId)||1):0}));
+    rows.sort((a,b)=>(selectedMode==='br'?a.rank-b.rank:0)||b.kills-a.kills||a.deaths-b.deaths||a.id.localeCompare(b.id));
+    if(selectedMode!=='br')rows.forEach((p,i)=>{p.rank=i&&p.kills===rows[i-1].kills&&p.deaths===rows[i-1].deaths?rows[i-1].rank:i+1;});
+    return rows;
+}
+function updateHUD() {
+    recordMatchRanks();
+    const alive = countAliveCombatants();
+    updateSpectatorAliveCount();
+    document.getElementById('hudAliveCount').innerText = alive;
+    document.getElementById('hudKills').innerText = myPlayer.kills;
+    document.getElementById('hudDeaths').innerText = myPlayer.deaths;
+    document.getElementById('hudWeapon').innerText = myPlayer.weapon ? WEAPONS[myPlayer.weapon].name : "맨손";
+    document.getElementById('hudAmmo').innerText = myPlayer.weapon
+        ? `${myPlayer.clipAmmo} / ${myPlayer.reserveAmmo} ${myPlayer.isReloading ? '(장전중...)' : ''}`
+        : "- / -";
+    document.getElementById('hudScope').innerText = myPlayer.equippedScope ? SCOPES[myPlayer.equippedScope].name : "없음";
+    document.getElementById('hudHelmet').innerText = myPlayer.equippedHelmet ? ARMORS[myPlayer.equippedHelmet].name : "없음";
+    document.getElementById('hudArmor').innerText = myPlayer.equippedBodyArmor ? ARMORS[myPlayer.equippedBodyArmor].name : "없음";
+    document.getElementById('hudZoneStage').innerText = zoneStage + "단계";
+
+    if (selectedMode === 'br' && isHost && gameStarted && !gameEnded && !isSpawnSelecting && initialTeamCount>1 && aliveTeamKeys().length<=1) {
+        triggerEndGame();
+    }
+}
+
+function aliveTeamKeys(){return [...new Set([...roomHumans(),...aiBots].filter(p=>p.hp>0&&!p.isDead&&!isAssignedSpectator(p.id)).map(p=>p.teamId||p.id))];}
+function triggerEndGame() {
+    if(gameEnded)return;
+    recordMatchRanks();
+    if(selectedMode==='br'){
+        winningTeam=aliveTeamKeys()[0]||null;
+        if(winningTeam)matchTeamRanks.set(winningTeam,1);
+    }
+    const rankings=buildHumanRankings();
+    gameEnded=true;
+    if(isHost)broadcastData({type:'GAME_OVER',rankings,winningTeam,totalTeams:matchTeamRanks.size,teamMaxSize});
+    displayRankings(rankings,matchTeamRanks.size);
+}
+
+function displayRankings(rankings,totalTeams=initialTeamCount) {
+    gameEnded=true;
+    const title=document.getElementById('victoryTitle'),rankList=document.getElementById('rankList');
+    // 각 접속자의 ID로 내 순위를 찾는다. 방장의 isMe 표시는 공유하지 않는다.
+    const humans=rankings.filter(p=>p.id&&!p.id.startsWith('bot_')&&!isAssignedSpectator(p.id));
+    const mine=humans.find(p=>p.id===myPlayer.id);
+    if(mine)title.innerText=selectedMode==='br'?(teamMaxSize>1?'내 팀':'내 순위')+' · '+mine.rank+'위 / '+totalTeams+'팀':'내 순위 · '+mine.rank+'위 / '+humans.length+'명';
+    else title.innerText='게임 종료 · 관전 결과';
+    rankList.replaceChildren();
+    const heading=document.createElement('div');heading.textContent=selectedMode==='br'?'전체 플레이어 · 팀 생존 순위 (봇 제외)':'전체 플레이어 순위 (봇 제외)';rankList.appendChild(heading);
+    for(const p of humans){
+        const row=document.createElement('div');row.style.color=p.id===myPlayer.id?'#00ffcc':'#ffffff';
+        const team=selectedMode==='br'?' · '+p.teamId.replace('team_','팀 '):'';
+        row.textContent='['+p.rank+'위] '+p.name+team+' · '+p.kills+'킬 / '+p.deaths+'데스';rankList.appendChild(row);
+    }
+    if(!humans.length){const row=document.createElement('div');row.textContent='참가한 플레이어가 없습니다.';rankList.appendChild(row);}
+    document.getElementById('victoryOverlay').style.display='block';
+    if(window._returnMenuTimer)clearTimeout(window._returnMenuTimer);
+    window._returnMenuTimer=setTimeout(returnToRoomAfterGame,5000);
+}
+
+function returnToMainMenuAfterGame() {
+    returnToRoomAfterGame();
+}
+
+function triggerDamageEffect() {
+    const overlay = document.getElementById('damageOverlay');
+    overlay.style.opacity = '1';
+    setTimeout(() => { overlay.style.opacity = '0'; }, 150);
+}
+
+function spawnBloodParticles(x, y) {
+    for (let i = 0; i < 12; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 4 + 1;
+        bloodParticles.push({
+            x: x, y: y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            radius: Math.random() * 3 + 2,
+            alpha: 1.0
+        });
+    }
+}
+
+
+function hasLineOfSight(p1, p2) {
+    // 샘플링 대신 선분-사각형 직접 판정: 더 정확하고 봇이 많아도 훨씬 가볍다.
+    const minX=Math.min(p1.x,p2.x), maxX=Math.max(p1.x,p2.x);
+    const minY=Math.min(p1.y,p2.y), maxY=Math.max(p1.y,p2.y);
+    for(const obs of nearbyObstacles(minX,minY,maxX,maxY)) {
+        const pad=obs.type==='tree'?TREE_HITBOX_PADDING:0;
+        if(maxX<obs.x-pad || minX>obs.x+obs.w+pad || maxY<obs.y-pad || minY>obs.y+obs.h+pad) continue;
+        if(obs.type==='house') {
+            const rects=getHouseBallisticWallRects(obs);
+            for(const r of rects) if(segmentIntersectsRect(p1.x,p1.y,p2.x,p2.y,r)) return false;
+        } else if(obs.type==='tree') {
+            if(segmentIntersectsRect(p1.x,p1.y,p2.x,p2.y,{x:obs.x-pad,y:obs.y-pad,w:obs.w+pad*2,h:obs.h+pad*2})) return false;
+        } else if(segmentIntersectsRect(p1.x,p1.y,p2.x,p2.y,obs)) return false;
+    }
+    return true;
+}
+
+function addGunshotEvent(x, y, shooterId) {
+    gunshotEvents.push({ x: x, y: y, shooterId: shooterId, time: Date.now() });
+}
+
+function shoot(shooter, extraSpread = 0) {
+    const authority=isHost&&selectedMode==='br'?getCombatEntityById(shooter.id):null;
+    if(authority&&(authority.isDead||authority.isDowned||authority.reviveHeld))return;
+    if(shooter.isDowned||shooter.reviveHeld)return;
+    if(isAssignedSpectator(shooter.id))return;
+    if(!shooter.weapon || shooter.clipAmmo <= 0 || shooter.isReloading) return;
+
+    if(!isHost && shooter.id === myPlayer.id) {
+        broadcastData({ type: 'SHOOT', player: shooter, extraSpread: extraSpread });
+    }
+
+    shooter.clipAmmo--;
+    if(shooter.id === myPlayer.id) updateHUD();
+
+    const w = WEAPONS[shooter.weapon];
+    addGunshotEvent(shooter.x, shooter.y, shooter.id);
+
+    const isRunning = shooter.movementMode === 'sprint';
+    const baseSpread = isRunning ? w.spread * 3.0 : w.spread;
+
+    const shotId=shooter.id+'_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    for(let i=0; i < w.pellets; i++) {
+        const spread = (Math.random() - 0.5) * (baseSpread + extraSpread);
+        const angle = shooter.angle + spread;
+        bullets.push({
+            x: shooter.x, y: shooter.y,
+            prevX: shooter.x, prevY: shooter.y,
+            dx: Math.cos(angle) * w.bulletSpeed,
+            dy: Math.sin(angle) * w.bulletSpeed,
+            damage: w.damage,
+            shotId,ownerId: shooter.id
+        });
+    }
+
+    if(shooter.clipAmmo === 0) {
+        reloadWeapon(shooter);
+    }
+}
+
+function distToSegmentSquared(p, v, w) {
+    const l2 = (v.x - w.x) ** 2 + (v.y - w.y) ** 2;
+    if (l2 === 0) return (p.x - v.x) ** 2 + (p.y - v.y) ** 2;
+    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return (p.x - (v.x + t * (w.x - v.x))) ** 2 + (p.y - (v.y + t * (w.y - v.y))) ** 2;
+}
+
+function respawnBot(bot) {
+    setTimeout(() => {
+        const safePos = getSafeSpawnPos(100, WORLD_SIZE);
+        bot.x = safePos.x;
+        bot.y = safePos.y;
+        bot.hp = bot.maxHp;
+        bot.isDead = false;
+        bot.targetItem = null;
+        bot.investigateTarget = null;
+        bot._brain = null;
+        bot._route = null;
+        bot._cornerEscape = null;
+        bot._avoidUntil = 0;
+        bot.firstSeenTime = null;
+        bot.stuckFrames = 0;
+        bot.isMoving = false;
+        bot._doorTransit = null;
+        bot._detour = null;
+        bot._lastNavGoal = null;
+        bot.angle = Math.random() * Math.PI * 2;
+
+        if(selectedMode === 'normal') {
+            const wKeys = ['ar', 'shotgun', 'sniper'];
+            const wType = wKeys[Math.floor(Math.random() * wKeys.length)];
+            bot.weapon = wType;
+            bot.clipAmmo = WEAPONS[wType].maxClip;
+            bot.reserveAmmo = WEAPONS[wType].maxClip * 4;
+        }
+
+        updateHUD();
+    }, 5000);
+}
+
+function respawnRemotePlayer(p, peerId) {
+    setTimeout(() => {
+        const safePos = getSafeSpawnPos(100, WORLD_SIZE);
+        p.x = safePos.x;
+        p.y = safePos.y;
+        p.hp = p.maxHp;
+        p.isDead = false;
+
+        if (isHost && peerId && connections[peerId]) {
+            connections[peerId].send({
+                type: 'RESPAWN_REMAPPED',
+                playerId: p.id,
+                x: safePos.x,
+                y: safePos.y
+            });
+        }
+        updateHUD();
+    }, 5000);
+}
+
+function getHouseDoorApproachPoint(house, outside = true) {
+    const side = house.doorSide || 'bottom';
+    const c = house.doorPos == null ? .5 : house.doorPos;
+    const wall = house.wallThickness || 20;
+    // 바깥/안쪽 점을 문에서 충분히 떨어뜨려 집 판정이 흔들리지 않게 한다.
+    const outsideGap = Math.max(42, wall + 24);
+    const insideGap = Math.max(46, wall + 26);
+    if (side === 'top') return {x:house.x + house.w*c, y:outside ? house.y - outsideGap : house.y + insideGap};
+    if (side === 'bottom') return {x:house.x + house.w*c, y:outside ? house.y + house.h + outsideGap : house.y + house.h - insideGap};
+    if (side === 'left') return {x:outside ? house.x - outsideGap : house.x + insideGap, y:house.y + house.h*c};
+    return {x:outside ? house.x + house.w + outsideGap : house.x + house.w - insideGap, y:house.y + house.h*c};
+}
+
+function getHouseDoorCenterPoint(house) {
+    const side = house.doorSide || 'bottom';
+    const c = house.doorPos == null ? .5 : house.doorPos;
+    if (side === 'top') return {x:house.x + house.w*c, y:house.y};
+    if (side === 'bottom') return {x:house.x + house.w*c, y:house.y + house.h};
+    if (side === 'left') return {x:house.x, y:house.y + house.h*c};
+    return {x:house.x + house.w, y:house.y + house.h*c};
+}
+
+function isPointInDoorCorridor(house, x, y, extra = 0) {
+    if (!house) return false;
+    const side = house.doorSide || 'bottom';
+    const c = house.doorPos == null ? .5 : house.doorPos;
+    const half = Math.max(18, (house.doorWidth || 64) * .5 - 3) + extra;
+    const depth = Math.max(58, (house.wallThickness || 20) + 42);
+    if (side === 'top' || side === 'bottom') {
+        const cx = house.x + house.w*c;
+        const wy = side === 'top' ? house.y : house.y + house.h;
+        return Math.abs(x-cx) <= half && Math.abs(y-wy) <= depth;
+    }
+    const cy = house.y + house.h*c;
+    const wx = side === 'left' ? house.x : house.x + house.w;
+    return Math.abs(y-cy) <= half && Math.abs(x-wx) <= depth;
+}
+
+// 맵은 고정이므로 장애물의 위치만 구역별로 저장한다. 문/창문 상태는 원본 객체에서 읽는다.
+let obstacleIndexSource=null, obstacleIndexCount=-1;
+const obstacleBuckets=new Map();
+const OBSTACLE_CELL=256;
+function nearbyObstacles(minX,minY,maxX,maxY) {
+    if(obstacleIndexSource!==obstacles || obstacleIndexCount!==obstacles.length){
+        obstacleIndexSource=obstacles;obstacleIndexCount=obstacles.length;obstacleBuckets.clear();
+        for(let i=0;i<obstacles.length;i++){
+            const o=obstacles[i],pad=o.type==='tree'?TREE_HITBOX_PADDING:0;
+            for(let x=Math.floor((o.x-pad)/OBSTACLE_CELL);x<=Math.floor((o.x+o.w+pad)/OBSTACLE_CELL);x++)
+            for(let y=Math.floor((o.y-pad)/OBSTACLE_CELL);y<=Math.floor((o.y+o.h+pad)/OBSTACLE_CELL);y++){
+                const key=x+','+y;let bucket=obstacleBuckets.get(key);
+                if(!bucket)obstacleBuckets.set(key,bucket=[]);bucket.push(i);
+            }
+        }
+    }
+    const ids=new Set();
+    for(let x=Math.floor(minX/OBSTACLE_CELL);x<=Math.floor(maxX/OBSTACLE_CELL);x++)
+    for(let y=Math.floor(minY/OBSTACLE_CELL);y<=Math.floor(maxY/OBSTACLE_CELL);y++){
+        const bucket=obstacleBuckets.get(x+','+y);if(bucket)for(const id of bucket)ids.add(id);
+    }
+    return Array.from(ids).sort((a,b)=>a-b).map(i=>obstacles[i]);
+}
+
+function checkBotNavigationCollision(x,y,radius=15) {
+    if(x<radius || y<radius || x>WORLD_SIZE-radius || y>WORLD_SIZE-radius) return true;
+    for(const obs of nearbyObstacles(x-radius,y-radius,x+radius,y+radius)){
+        const pad=obs.type==='tree'?TREE_HITBOX_PADDING:0;
+        if(x+radius<obs.x-pad || x-radius>obs.x+obs.w+pad || y+radius<obs.y-pad || y-radius>obs.y+obs.h+pad)continue;
+        if(obstacleHitsCircle(obs,x,y,radius))return true;
+    }
+    return false;
+}
+
+function botSegmentClear(a,b) {
+    const radius=15-1e-6;
+    if(Math.min(a.x,b.x)<15 || Math.min(a.y,b.y)<15 || Math.max(a.x,b.x)>WORLD_SIZE-15 || Math.max(a.y,b.y)>WORLD_SIZE-15)return false;
+    const candidates=nearbyObstacles(Math.min(a.x,b.x)-15,Math.min(a.y,b.y)-15,Math.max(a.x,b.x)+15,Math.max(a.y,b.y)+15);
+    // 원형 몸체가 지나가는 전체 구간을 검사한다. 표본 사이의 모서리도 놓치지 않는다.
+    for(const obs of candidates){
+        const pad=obs.type==='tree'?TREE_HITBOX_PADDING:0;
+        const rects=obs.type==='house'?getHouseWallRects(obs):[{x:obs.x-pad,y:obs.y-pad,w:obs.w+pad*2,h:obs.h+pad*2}];
+        for(const q of rects){
+            if(segmentIntersectsRect(a.x,a.y,b.x,b.y,{x:q.x-radius,y:q.y,w:q.w+radius*2,h:q.h}) ||
+               segmentIntersectsRect(a.x,a.y,b.x,b.y,{x:q.x,y:q.y-radius,w:q.w,h:q.h+radius*2}))return false;
+            for(const x of [q.x,q.x+q.w])for(const y of [q.y,q.y+q.h])
+                if(distToSegmentSquared({x,y},a,b)<radius*radius)return false;
+        }
+    }
+    return true;
+}
+
+// 문 앞까지의 경로를 먼저 구한다. 막힌 벽의 양쪽을 번갈아 고르지 않는다.
+function* planBotRoute(start,goal,cell=20) {
+    const margin=500;
+    const minX=Math.max(16,Math.min(start.x,goal.x)-margin),maxX=Math.min(WORLD_SIZE-16,Math.max(start.x,goal.x)+margin);
+    const minY=Math.max(16,Math.min(start.y,goal.y)-margin),maxY=Math.min(WORLD_SIZE-16,Math.max(start.y,goal.y)+margin);
+    const heap=[], nodes=new Map();
+    function push(n){heap.push(n);let i=heap.length-1;while(i){const p=(i-1)>>1;if(heap[p].f<=n.f)break;heap[i]=heap[p];i=p;}heap[i]=n;}
+    function pop(){const n=heap[0],last=heap.pop();if(heap.length){let i=0;while(i*2+1<heap.length){let c=i*2+1;if(c+1<heap.length&&heap[c+1].f<heap[c].f)c++;if(heap[c].f>=last.f)break;heap[i]=heap[c];i=c;}heap[i]=last;}return n;}
+    const first={x:start.x,y:start.y,ix:0,iy:0,g:0,f:Math.hypot(goal.x-start.x,goal.y-start.y),parent:null};
+    nodes.set('0,0',first);push(first);
+    let count=0;
+    while(heap.length && count++<6000){
+        if(count%32===0)yield;
+        const n=pop();if(n.closed)continue;n.closed=true;
+        const remaining=Math.hypot(n.x-goal.x,n.y-goal.y);
+        if(remaining<cell*2 && botSegmentClear(n,goal)){
+            const path=[{x:goal.x,y:goal.y}];let p=n;
+            while(p.parent){path.push({x:p.x,y:p.y});p=p.parent;}
+            path.reverse();return path;
+        }
+        for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+            if(!dx&&!dy)continue;
+            const ix=n.ix+dx,iy=n.iy+dy,key=ix+','+iy;
+            const x=start.x+ix*cell,y=start.y+iy*cell;
+            if(x<minX||x>maxX||y<minY||y>maxY)continue;
+            const prev=nodes.get(key);if(prev?.closed)continue;
+            const g=n.g+Math.hypot(dx,dy)*cell;
+            if(prev && prev.g<=g)continue;
+            if(!botSegmentClear(n,{x,y}))continue;
+            const next={ix,iy,x,y,g,f:g+Math.hypot(goal.x-x,goal.y-y),parent:n};
+            if(prev)prev.closed=true;
+            nodes.set(key,next);push(next);
+        }
+    }
+    return cell===20?yield* planBotRoute(start,goal,10):null;
+}
+
+function walkBotRoute(bot,goal,speed) {
+    const brain=ensureBotBrain(bot);brain.movementRequested=true;
+    bot._lastNavGoal={x:goal.x,y:goal.y};
+    const now=performance.now();
+    if(bot._cornerEscape){
+        if(Math.hypot(bot.x-bot._cornerEscape.x,bot.y-bot._cornerEscape.y)<3 || now>bot._cornerEscape.until || !botSegmentClear(bot,bot._cornerEscape))bot._cornerEscape=null;
+        else goal=bot._cornerEscape;
+    }
+    if(Math.hypot(goal.x-bot.x,goal.y-bot.y)<2){bot.isMoving=false;brain.movementRequested=false;return;}
+    let next=goal;
+    if(!botSegmentClear(bot,goal)) {
+        let route=bot._route;
+        if(!route || Math.hypot(route.goal.x-goal.x,route.goal.y-goal.y)>30 ||
+            (route.points.length && !botSegmentClear(bot,route.points[0])) ||
+            (!route.points.length && !route.search && now>route.retryAt)) {
+            route=bot._route={goal:{x:goal.x,y:goal.y},points:[],search:planBotRoute({x:bot.x,y:bot.y},{x:goal.x,y:goal.y}),retryAt:now+1200};
+        }
+        if(route.search){
+            // Resume A* across frames instead of blocking all players for one bot.
+            const deadline=Math.min(botRouteDeadline,performance.now()+1);
+            while(performance.now()<deadline){
+                const step=route.search.next();
+                if(step.done){route.points=step.value||[];route.search=null;route.retryAt=now+1200;break;}
+            }
+        }
+        while(route.points.length && Math.hypot(route.points[0].x-bot.x,route.points[0].y-bot.y)<2)route.points.shift();
+        if(!route.points.length){bot.isMoving=false;return;}
+        // 모서리를 가로지르지 않을 때만 가까운 경유점을 생략한다.
+        for(let i=Math.min(8,route.points.length-1);i>0;i--)if(botSegmentClear(bot,route.points[i])){route.points.splice(0,i);break;}
+        next=route.points[0];
+    } else bot._route=null;
+    const dx=next.x-bot.x,dy=next.y-bot.y,dist=Math.hypot(dx,dy);
+    const total=Math.min(speed*BOT_MOVEMENT_SCALE,dist,9.5);
+    if(dist<.001)return;
+    const n=Math.max(1,Math.ceil(total/2)),step=total/n;
+    const ox=bot.x,oy=bot.y;
+    for(let i=0;i<n;i++){
+        const x=bot.x+dx/dist*step,y=bot.y+dy/dist*step;
+        if(checkBotNavigationCollision(x,y,15)){bot._route=null;break;}
+        bot.x=x;bot.y=y;
+    }
+    bot.isMoving=Math.hypot(bot.x-ox,bot.y-oy)>.01;
+    if(bot.isMoving)bot.moveAngle=Math.atan2(bot.y-oy,bot.x-ox);
+}
+
+function beginDoorTransit(bot, house, mode) {
+    if (!house) return null;
+    if (!bot._doorTransit || bot._doorTransit.house !== house || bot._doorTransit.mode !== mode) {
+        bot._doorTransit = {house, mode, stage:0, startedAt:performance.now()};
+    }
+    return bot._doorTransit;
+}
+
+function clearDoorTransit(bot) {
+    bot._doorTransit = null;
+}
+
+function getDoorTransitTarget(bot, transit) {
+    const house = transit.house;
+    if(doorClosed(house)){
+        const c=getHouseDoorCenterPoint(house);
+        if(Math.hypot(bot.x-c.x,bot.y-c.y)<=80)setHouseDoor(house,true);
+    }
+    const outer = getHouseDoorApproachPoint(house, true);
+    const center = getHouseDoorCenterPoint(house);
+    const inner = getHouseDoorApproachPoint(house, false);
+    const points = transit.mode === 'enter' ? [outer, center, inner] : [inner, center, outer];
+    let p = points[Math.min(transit.stage, 2)];
+    let d = Math.hypot(bot.x-p.x, bot.y-p.y);
+    const threshold = 4;
+    while (d <= threshold && transit.stage < 2) {
+        transit.stage++;
+        p = points[transit.stage];
+        d = Math.hypot(bot.x-p.x, bot.y-p.y);
+    }
+    return {...p, doorTransit:true, house, transit};
+}
+
+function getAINavigationTarget(bot, target) {
+    if (!target) { clearDoorTransit(bot); return null; }
+    const targetHouse = getHouseContainingPoint(target.x, target.y);
+    const botHouse = getHouseContainingPoint(bot.x, bot.y);
+
+    // 도착 여부는 집 내부 판정 대신 마지막 경유점으로 확인한다.
+    if(bot._doorTransit){
+        const t=bot._doorTransit;
+        const end=getHouseDoorApproachPoint(t.house,t.mode==='exit');
+        // 실내에서 목표가 바뀌면 오래된 퇴장 명령을 먼저 완료하지 않는다.
+        if(t.stage===0 && ((t.mode==='exit' && botHouse===t.house && targetHouse===t.house) ||
+            (t.mode==='enter' && botHouse!==t.house && targetHouse!==t.house))) {
+            clearDoorTransit(bot);bot._route=null;
+        }
+        else if(t.stage===2 && Math.hypot(bot.x-end.x,bot.y-end.y)<5) clearDoorTransit(bot);
+        else return getDoorTransitTarget(bot,t);
+    }
+
+
+
+    if (botHouse && botHouse !== targetHouse) {
+        return getDoorTransitTarget(bot, beginDoorTransit(bot, botHouse, 'exit'));
+    }
+    if (targetHouse && targetHouse !== botHouse) {
+        return getDoorTransitTarget(bot, beginDoorTransit(bot, targetHouse, 'enter'));
+    }
+    clearDoorTransit(bot);
+    return {x:target.x, y:target.y};
+}
+
+function moveBotThroughDoor(bot,target,speed) {
+    if(!target?.doorTransit)return false;
+    // 0단계는 집 모서리를 돌아 문 정면에 정렬한다. 벽을 무시하지 않는다.
+    walkBotRoute(bot,target,speed);
+    return true;
+}
+
+function findBotDetourPoint(bot, goalX, goalY) {
+    const base = Math.atan2(goalY - bot.y, goalX - bot.x);
+    const side = bot._wallFollowSide || bot.avoidDir || 1;
+
+    const offsets = [
+        .45*side, -.45*side,
+        .72*side, -.72*side,
+        1.00*side, -1.00*side,
+        1.28*side, -1.28*side,
+        1.55*side, -1.55*side,
+        1.85*side, -1.85*side,
+        2.15*side, -2.15*side
+    ];
+    const lengths = [70, 105, 145, 190, 245, 310];
+
+    let best = null;
+    let bestScore = Infinity;
+
+    for (const len of lengths) {
+        for (const off of offsets) {
+            const a = base + off;
+            const x = bot.x + Math.cos(a) * len;
+            const y = bot.y + Math.sin(a) * len;
+
+            if (x < 30 || y < 30 || x > WORLD_SIZE - 30 || y > WORLD_SIZE - 30) continue;
+            if (checkBotNavigationCollision(x, y, 15, null)) continue;
+            if (!botPathClearFrom(bot.x, bot.y, a, len, 14)) continue;
+
+            const clearance = getBotObstacleClearance(x, y, 14);
+            if (clearance < 10) continue;
+
+            const goalDist = Math.hypot(goalX - x, goalY - y);
+            const turnCost = Math.abs(off) * 28;
+            const wallPenalty = clearance < 18 ? (18 - clearance) * 12 : 0;
+            const score = goalDist + turnCost + wallPenalty + len * .04;
+
+            if (score < bestScore) {
+                bestScore = score;
+                best = {
+                    x, y,
+                    until: performance.now() + 1500
+                };
+            }
+        }
+    }
+    return best;
+}
+
+function recoverStuckBot(bot) {
+    bot._route=null;bot._detour=null;bot._avoidUntil=0;bot.stuckFrames=0;
+    if(bot._brain)bot._brain.zoneGoal=null;
+    if(bot._cornerEscape && performance.now()<bot._cornerEscape.until)return true;
+    const goal=bot._lastNavGoal||bot;
+    let best=null,score=-Infinity;
+    // 뒤쪽을 포함한 모든 방향에서 실제로 걸어 나갈 공간을 찾는다.
+    for(const distance of [24,40,64])for(let i=0;i<24;i++){
+        const angle=i*Math.PI/12,x=bot.x+Math.cos(angle)*distance,y=bot.y+Math.sin(angle)*distance;
+        if(!botSegmentClear(bot,{x,y}))continue;
+        const clearance=Math.min(50,getBotObstacleClearance(x,y,15));
+        const value=clearance*3-Math.hypot(goal.x-x,goal.y-y)*.05;
+        if(value>score){score=value;best={x,y,until:performance.now()+1600};}
+    }
+    bot._cornerEscape=best;
+    return !!best;
+}
+
+function getBotObstacleClearance(x, y, radius = 15) {
+    let minClear = 160;
+
+    const rectClearance = (r) => {
+        const cx = Math.max(r.x, Math.min(x, r.x + r.w));
+        const cy = Math.max(r.y, Math.min(y, r.y + r.h));
+        return Math.hypot(x - cx, y - cy) - radius;
+    };
+
+    for (const obs of nearbyObstacles(x-180,y-180,x+180,y+180)) {
+        if (obs.type === 'house') {
+            // 집 전체 박스가 아니라 실제 벽 조각 기준으로 거리 계산.
+            // 문/집 내부를 벽으로 오인하지 않게 한다.
+            const rects = getHouseWallRects(obs);
+            for (const r of rects) {
+                const d = rectClearance(r);
+                if (d < minClear) minClear = d;
+            }
+        } else {
+            const pad = obs.type === 'tree' ? TREE_HITBOX_PADDING : 0;
+            const r = {
+                x: obs.x - pad,
+                y: obs.y - pad,
+                w: obs.w + pad * 2,
+                h: obs.h + pad * 2
+            };
+            const d = rectClearance(r);
+            if (d < minClear) minClear = d;
+        }
+    }
+    return minClear;
+}
+
+function isBotMovePathClear(bot, angle, distance, radius = 15) {
+    const steps=Math.max(2,Math.ceil(distance/5));
+    for(let i=1;i<=steps;i++){
+        const t=i/steps;
+        const x=bot.x+Math.cos(angle)*distance*t;
+        const y=bot.y+Math.sin(angle)*distance*t;
+        if(checkBotNavigationCollision(x,y,radius,null)) return false;
+    }
+    return true;
+}
+
+function chooseBotWallFollowAngle(bot, baseAngle, speed) {
+    // 벽에 바짝 붙어 비비지 않도록 진행 방향뿐 아니라 약간 앞쪽 경로와
+    // 장애물 여유 거리까지 함께 평가한다.
+    const side=(bot._wallFollowSide||bot.avoidDir||1);
+    const candidates=[
+        0,
+        .38*side,-.38*side,
+        .70*side,-.70*side,
+        1.02*side,-1.02*side,
+        1.30*side,-1.30*side,
+        1.55*side,-1.55*side
+    ];
+    let best=null, bestScore=-Infinity;
+    for(const off of candidates){
+        const a=baseAngle+off;
+        const look=Math.max(28,speed*8);
+        if(!isBotMovePathClear(bot,a,look,14)) continue;
+        const tx=bot.x+Math.cos(a)*Math.max(speed,6);
+        const ty=bot.y+Math.sin(a)*Math.max(speed,6);
+        const clearance=getBotObstacleClearance(tx,ty,14);
+        // 벽에서 8~30px 정도 떨어진 경로를 선호하고 목표 방향에서 너무 벗어나지 않게 한다.
+        const clearanceScore=Math.min(30,Math.max(-30,clearance))*1.35;
+        const turnPenalty=Math.abs(off)*13;
+        const score=clearanceScore-turnPenalty+(off===0?8:0);
+        if(score>bestScore){bestScore=score;best={angle:a,off,clearance};}
+    }
+    return best;
+}
+
+
+function botPathClearFrom(x, y, angle, distance, radius = 14) {
+    const steps = Math.max(2, Math.ceil(distance / 4));
+    for (let i = 1; i <= steps; i++) {
+        const d = distance * i / steps;
+        const px = x + Math.cos(angle) * d;
+        const py = y + Math.sin(angle) * d;
+        if (checkBotNavigationCollision(px, py, radius, null)) return false;
+    }
+    return true;
+}
+
+function scoreBotMoveDirection(bot, angle, desiredAngle, probeDistance = 54) {
+    if (!botPathClearFrom(bot.x, bot.y, angle, probeDistance, 14)) return -Infinity;
+
+    const px = bot.x + Math.cos(angle) * 20;
+    const py = bot.y + Math.sin(angle) * 20;
+    const clearance = getBotObstacleClearance(px, py, 14);
+
+    // 목표 방향과의 차이를 -PI~PI로 정규화
+    let diff = angle - desiredAngle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+
+    // 벽에 너무 가까운 방향은 강하게 감점.
+    let clearanceScore = 0;
+    if (clearance < 6) clearanceScore = -120;
+    else if (clearance < 12) clearanceScore = -45 + clearance * 2;
+    else if (clearance < 30) clearanceScore = 26 - Math.abs(clearance - 20) * 0.7;
+    else clearanceScore = 18;
+
+    const goalScore = Math.cos(diff) * 38;
+    const turnPenalty = Math.abs(diff) * 7;
+    return clearanceScore + goalScore - turnPenalty;
+}
+
+function chooseStableBotMoveAngle(bot, desiredAngle, speed) {
+    const now = performance.now();
+
+    // 이미 선택한 벽 우회 방향은 잠시 유지해 좌우 떨림을 방지.
+    if (bot._avoidAngle !== undefined && bot._avoidUntil && now < bot._avoidUntil) {
+        if (botPathClearFrom(bot.x, bot.y, bot._avoidAngle, Math.max(34, speed * 8), 14)) {
+            return bot._avoidAngle;
+        }
+    }
+
+    const offsets = [
+        0,
+        0.22, -0.22,
+        0.42, -0.42,
+        0.65, -0.65,
+        0.88, -0.88,
+        1.10, -1.10,
+        1.32, -1.32,
+        1.52, -1.52,
+        1.78, -1.78,
+        2.05, -2.05
+    ];
+
+    let bestAngle = null;
+    let bestScore = -Infinity;
+
+    for (const off of offsets) {
+        const a = desiredAngle + off;
+        const score = scoreBotMoveDirection(bot, a, desiredAngle, Math.max(50, speed * 10));
+        if (score > bestScore) {
+            bestScore = score;
+            bestAngle = a;
+        }
+    }
+
+    if (bestAngle !== null) {
+        let diff = bestAngle - desiredAngle;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+
+        if (Math.abs(diff) > 0.12) {
+            bot._avoidAngle = bestAngle;
+            bot._avoidUntil = now + 700;
+            bot._wallFollowSide = diff >= 0 ? 1 : -1;
+        } else {
+            bot._avoidUntil = 0;
+        }
+    }
+
+    return bestAngle;
+}
+
+
+function getCardinalBotDirection(vx, vy) {
+    // 대각선 이동 금지: 가장 큰 축 하나만 사용한다.
+    if (Math.abs(vx) >= Math.abs(vy)) {
+        return {x: Math.sign(vx || 1), y: 0};
+    }
+    return {x: 0, y: Math.sign(vy || 1)};
+}
+
+function isCardinalPathClear(bot, dx, dy, distance, radius = 14) {
+    const steps = Math.max(2, Math.ceil(distance / 4));
+    for (let i=1;i<=steps;i++) {
+        const d = distance * i / steps;
+        const x = bot.x + dx*d;
+        const y = bot.y + dy*d;
+        if (checkBotNavigationCollision(x,y,radius,null)) return false;
+        // 벽과 최소 거리 확보
+        if (getBotObstacleClearance(x,y,radius) < 8) return false;
+    }
+    return true;
+}
+
+// 기존 우회/문 통과 처리를 유지하면서 자유로운 방향으로 이동한다.
+function chooseCardinalBotDirection(bot, vx, vy) {
+    const desired = Math.atan2(vy, vx);
+    if (isBotMovePathClear(bot, desired, 32, 14)) {
+        bot._avoidUntil = 0;
+        return {x:Math.cos(desired), y:Math.sin(desired)};
+    }
+    const angle = chooseStableBotMoveAngle(bot, desired, Math.hypot(vx,vy));
+    return angle === null ? null : {x:Math.cos(angle), y:Math.sin(angle)};
+}
+
+function moveAIBot(bot,vx,vy) {
+    const speed=Math.hypot(vx,vy);
+    if(speed<.001){bot.isMoving=false;return;}
+    ensureBotBrain(bot).movementRequested=true;
+    if(bot._cornerEscape){walkBotRoute(bot,bot._lastNavGoal||bot._cornerEscape,speed);return;}
+    if(bot._doorTransit){moveBotThroughDoor(bot,getDoorTransitTarget(bot,bot._doorTransit),speed);return;}
+    // 전투 중 옆걸음도 실제로 열려 있는 방향을 사용한다.
+    let angle=Math.atan2(vy,vx);
+    if(!isBotMovePathClear(bot,angle,32,15)){
+        const candidate=chooseStableBotMoveAngle(bot,angle,speed);
+        if(candidate===null){bot.isMoving=false;recoverStuckBot(bot);if(bot._cornerEscape)walkBotRoute(bot,bot._cornerEscape,speed);return;}
+        angle=candidate;
+    }
+    walkBotRoute(bot,{x:bot.x+Math.cos(angle)*32,y:bot.y+Math.sin(angle)*32},speed);
+}
+
+let lastAIUpdateAt = 0;
+const AI_UPDATE_INTERVAL = 34; // 약 30Hz
+
+function ensureBotBrain(bot) {
+    if (!bot._brain) bot._brain = {
+        state:'patrol', targetId:null, lastKnown:null, lastSeenAt:0,
+        reactionUntil:0, strafeDir:Math.random()<.5?-1:1, strafeUntil:0,
+        patrol:null, patrolUntil:0, cover:null, coverUntil:0,
+        decisionAt:0, lastX:bot.x, lastY:bot.y, stillSince:performance.now(),
+        personality: { aggression:.7+Math.random()*.6, caution:.75+Math.random()*.5,
+            aimSkill:.8+Math.random()*.4, turnSpeed:2.8+Math.random()*1.8 },
+        aimAngle:bot.angle || 0, aimBias:0, aimBiasGoal:0, aimNoiseAt:0,
+        burstLeft:0, burstPauseUntil:0, scanAt:0, observed:null,
+        lastHeardAt:0, lastHp:bot.hp, hurtUntil:0, holdUntil:0,
+        movementRequested:false
+    };
+    if (bot._brain) {
+        if (bot._brain.lastEnemyX === undefined) bot._brain.lastEnemyX = null;
+        if (bot._brain.lastEnemyY === undefined) bot._brain.lastEnemyY = null;
+        if (bot._brain.enemyVx === undefined) bot._brain.enemyVx = 0;
+        if (bot._brain.enemyVy === undefined) bot._brain.enemyVy = 0;
+        if (bot._brain.predictedUntil === undefined) bot._brain.predictedUntil = 0;
+    }
+    return bot._brain;
+}
+
+function getBotEnemies(bot) {
+    const arr=[];
+    if(myPlayer.hp>0 && !myPlayer.isDead && !isRespawning && !areAllies(bot,myPlayer)) arr.push(myPlayer);
+    Object.values(remotePlayers).forEach(p=>{ if(p.hp>0 && !p.isDead && !areAllies(bot,p)) arr.push(p); });
+    aiBots.forEach(b=>{ if(b!==bot && b.hp>0 && !b.isDead && !areAllies(bot,b)) arr.push(b); });
+    return arr;
+}
+
+function getBotWeaponRange(bot) {
+    if(bot.weapon==='shotgun') return {ideal:210,min:95,max:430,vision:820};
+    if(bot.weapon==='sniper') return {ideal:720,min:380,max:1150,vision:1450};
+    return {ideal:430,min:190,max:820,vision:1200};
+}
+
+function botAngleDelta(to, from) {
+    return Math.atan2(Math.sin(to-from), Math.cos(to-from));
+}
+
+function turnBotAim(bot, brain, desired, dt) {
+    const limit=brain.personality.turnSpeed*(AI_DIFFICULTY[aiDifficulty]?.turnMult||1)*dt;
+    brain.aimAngle += Math.max(-limit, Math.min(limit, botAngleDelta(desired,brain.aimAngle)));
+    brain.aimAngle=botAngleDelta(brain.aimAngle,0);
+    bot.angle=brain.aimAngle;
+}
+
+function chooseBotEnemy(bot, brain) {
+    const now=Date.now();
+    const range=getBotWeaponRange(bot);
+    // 인지는 7~10Hz. 캐시에는 실제 객체 대신 마지막 관측 좌표만 저장한다.
+    if(now<brain.scanAt) {
+        const t=brain.observed;
+        const live=t&&getCombatEntityById(t.id);
+        if(live && live.hp>0 && !live.isDead && !!live.isDowned===!!t.isDowned && hasLineOfSight(bot,t))return t;
+        brain.scanAt=0;
+    }
+    brain.scanAt=now+100+Math.random()*50;
+    let best=null, bestScore=Infinity;
+    for(const t of getBotEnemies(bot)) {
+        const d=Math.hypot(t.x-bot.x,t.y-bot.y);
+        if(d>range.vision) continue;
+        const offset=Math.abs(botAngleDelta(Math.atan2(t.y-bot.y,t.x-bot.x),brain.aimAngle));
+        // 가까운 적 외에는 전방 약 150도 안에서만 발견한다.
+        if(d>110 && offset>Math.PI*.42) continue;
+        if(!hasLineOfSight(bot,t)) continue;
+        const score=(t.isDowned?100000:0)+d-(brain.targetId===t.id?180:0);
+        if(score<bestScore){bestScore=score;best=t;}
+    }
+    brain.observed=best ? {id:best.id,x:best.x,y:best.y,isDowned:!!best.isDowned} : null;
+    return brain.observed;
+}
+
+function listenForBotThreats(bot,brain,now) {
+    let newest=null;
+    for(const snd of gunshotEvents) {
+        if(snd.time<=brain.lastHeardAt || now-snd.time>1200 || snd.shooterId===bot.id) continue;
+        const shooter=getCombatEntityById(snd.shooterId);
+        if(shooter && areAllies(bot,shooter)) continue;
+        const d=Math.hypot(snd.x-bot.x,snd.y-bot.y);
+        if(d>1400 || d<30) continue;
+        if(!newest || snd.time>newest.time) newest=snd;
+    }
+    if(!newest) return;
+    brain.lastHeardAt=newest.time;
+    if(now-brain.lastSeenAt<900) return;
+    // 소리는 대략적인 방향만 알려준다. 같은 총소리로 기억 시간을 연장하지 않는다.
+    const error=45+Math.hypot(newest.x-bot.x,newest.y-bot.y)*.1;
+    const a=Math.random()*Math.PI*2, r=error*(.5+Math.random()*.5);
+    bot.investigateTarget={x:Math.max(25,Math.min(WORLD_SIZE-25,newest.x+Math.cos(a)*r)),
+        y:Math.max(25,Math.min(WORLD_SIZE-25,newest.y+Math.sin(a)*r)),time:newest.time};
+}
+
+function updateHumanBotAim(bot,brain,enemy,diff,now,dt) {
+    const w=WEAPONS[bot.weapon];
+    const distance=Math.hypot(enemy.x-bot.x,enemy.y-bot.y);
+    const travelMs=Math.min(160,distance/(w.bulletSpeed*60)*1000);
+    const desired=Math.atan2(enemy.y+brain.enemyVy*travelMs*.7-bot.y,
+        enemy.x+brain.enemyVx*travelMs*.7-bot.x);
+    if(now>=brain.aimNoiseAt) {
+        brain.aimNoiseAt=now+200+Math.random()*250;
+        brain.aimBiasGoal=(Math.random()-.5)*diff.spread/brain.personality.aimSkill;
+    }
+    brain.aimBias+=(brain.aimBiasGoal-brain.aimBias)*Math.min(1,dt*5);
+    turnBotAim(bot,brain,desired+brain.aimBias,dt);
+    if(now<brain.reactionUntil || now<brain.burstPauseUntil || bot.isReloading || bot.clipAmmo<=0) return;
+    if(distance>getBotWeaponRange(bot).max || Math.abs(botAngleDelta(desired,bot.angle))>.1+diff.spread) return;
+    if(!hasLineOfSight(bot,enemy)) return;
+    // 실제 조준 방향까지 확인해서 아군 앞에서는 방아쇠를 놓는다.
+    const endpoint={x:bot.x+Math.cos(bot.angle)*distance,y:bot.y+Math.sin(bot.angle)*distance};
+    if(isFriendlyInFireLane(bot,enemy) || isFriendlyInFireLane(bot,endpoint)) return;
+    if(now-(bot.lastShootTime||0)<w.cooldown) return;
+    if(brain.burstLeft<=0) brain.burstLeft=bot.weapon==='ar'?2+Math.floor(Math.random()*4):1;
+    shoot(bot,diff.spread*.35+(bot.isMoving?.025:0));
+    bot.lastShootTime=now;
+    if(--brain.burstLeft<=0) brain.burstPauseUntil=now+(bot.weapon==='ar'?240+Math.random()*420:100+Math.random()*200);
+}
+
+function isFriendlyInFireLane(bot, enemy) {
+    const allies=[];
+    if(areAllies(bot,myPlayer) && myPlayer.hp>0 && !myPlayer.isDead) allies.push(myPlayer);
+    Object.values(remotePlayers).forEach(p=>{ if(p.hp>0 && !p.isDead && areAllies(bot,p)) allies.push(p); });
+    aiBots.forEach(b=>{ if(b!==bot && b.hp>0 && !b.isDead && areAllies(bot,b)) allies.push(b); });
+    const ex=enemy.x, ey=enemy.y;
+    const segLen2=(ex-bot.x)**2+(ey-bot.y)**2;
+    if(segLen2<1) return false;
+    for(const a of allies){
+        const t=((a.x-bot.x)*(ex-bot.x)+(a.y-bot.y)*(ey-bot.y))/segLen2;
+        if(t<=.05 || t>=.95) continue;
+        if(distToSegmentSquared(a,{x:bot.x,y:bot.y},{x:ex,y:ey}) < 34*34) return true;
+    }
+    return false;
+}
+
+function findBotCoverPoint(bot, enemy) {
+    let best=null, bestScore=Infinity;
+    const base=Math.atan2(bot.y-enemy.y,bot.x-enemy.x);
+    const radii=[110,170,240];
+    for(const r of radii){
+        for(let i=0;i<12;i++){
+            const a=base + (i-5.5)*Math.PI/12;
+            const x=bot.x+Math.cos(a)*r, y=bot.y+Math.sin(a)*r;
+            if(x<25||y<25||x>WORLD_SIZE-25||y>WORLD_SIZE-25) continue;
+            if(checkBotNavigationCollision(x,y,15,null)) continue;
+            const hidden=!hasLineOfSight(enemy,{x,y});
+            if(!hidden) continue;
+            const score=Math.hypot(x-bot.x,y-bot.y) + Math.hypot(x-enemy.x,y-enemy.y)*.08;
+            if(score<bestScore){bestScore=score;best={x,y};}
+        }
+    }
+    return best;
+}
+
+function moveBotToward(bot,target,speed,mode='sprint') {
+    if(!target)return false;
+    bot.movementMode=mode;
+    if(mode==='sprint')speed=Math.min(4.6,speed*1.45);
+    const navTarget=getAINavigationTarget(bot,target)||target;
+    walkBotRoute(bot,navTarget,speed);
+    return true;
+}
+
+function getAmmoItemTypeForWeapon(weapon) {
+    if(weapon==='ar') return 'ammo_ar';
+    if(weapon==='sniper') return 'ammo_sniper';
+    if(weapon==='shotgun') return 'ammo_shotgun';
+    return null;
+}
+
+function botHasGun(bot) {
+    return !!(bot.weapon && WEAPONS[bot.weapon]);
+}
+
+function botHasUsableAmmo(bot) {
+    return botHasGun(bot) && ((bot.clipAmmo||0) + (bot.reserveAmmo||0) > 0);
+}
+
+function chooseBotEmergencySupply(bot) {
+    let best=null, bestScore=Infinity;
+    const hasGun=botHasGun(bot);
+    const ammoType=hasGun ? getAmmoItemTypeForWeapon(bot.weapon) : null;
+    for(const item of droppedItems){
+        const d=Math.hypot(item.x-bot.x,item.y-bot.y);
+        if(d>3200) continue;
+        let priority=Infinity;
+        if(!hasGun && ['ar','shotgun','sniper'].includes(item.type)) {
+            priority=0;
+        } else if(hasGun && !botHasUsableAmmo(bot) && item.type===ammoType) {
+            priority=0;
+        } else if(hasGun && !botHasUsableAmmo(bot) && ['ar','shotgun','sniper'].includes(item.type)) {
+            // 현재 총의 탄약이 전혀 없고 맞는 탄약도 멀 때는 다른 장전된 총도 차선책으로 사용한다.
+            priority=220;
+        }
+        if(priority===Infinity) continue;
+        const score=priority+d;
+        if(score<bestScore){bestScore=score;best=item;}
+    }
+    return best;
+}
+
+function botLootPriority(bot,item) {
+    if(['ar','shotgun','sniper'].includes(item.type))return !botHasUsableAmmo(bot)?0:Infinity;
+    if(item.type===getAmmoItemTypeForWeapon(bot.weapon) && bot.reserveAmmo<WEAPONS[bot.weapon].maxClip*2)return 120;
+    if(SCOPES[item.type] && (!bot.equippedScope || SCOPES[item.type].viewOffset>SCOPES[bot.equippedScope].viewOffset))return 260;
+    if(ARMORS[item.type]){
+        const current=item.type.startsWith('body_')?bot.equippedBodyArmor:bot.equippedHelmet;
+        if(!current || ARMORS[item.type].reduction>ARMORS[current].reduction)return 320;
+    }
+    if((item.type==='bandage' || isMedkitItemType(item.type)) && bot.hp<bot.maxHp)return 100;
+    return Infinity;
+}
+
+function chooseBotLoot(bot) {
+    let best=null,score=Infinity;
+    const house=getHouseContainingPoint(bot.x,bot.y);
+    for(const item of droppedItems){
+        const d=Math.hypot(item.x-bot.x,item.y-bot.y);
+        if(d>2600)continue;
+        // 안전지대 밖 보급품 때문에 들어갔다 나오는 루프를 방지한다.
+        if(selectedMode==='br' && Math.hypot(item.x-zone.x,item.y-zone.y)>zone.radius-Math.min(260,zone.radius*.25))continue;
+        const priority=botLootPriority(bot,item);
+        if(!Number.isFinite(priority))continue;
+        const sameHouse=house && isPointInsideHouse(item.x,item.y,house,(house.wallThickness||18)+2);
+        const sc=priority+d-(sameHouse?650:0);
+        if(sc<score){score=sc;best=item;}
+    }
+    return best;
+}
+
+function botPickupItem(bot,item){
+    if(!item || !droppedItems.includes(item) || Math.hypot(bot.x-item.x,bot.y-item.y)>36 ||
+        !botSegmentClear(bot,item))return false;
+    if(['ar','sniper','shotgun'].includes(item.type)){
+        if(bot.isReloading)return false;
+        bot.weapon=item.type;bot.clipAmmo=WEAPONS[item.type].maxClip;bot.reserveAmmo=WEAPONS[item.type].maxClip*2;
+    } else if(item.type===getAmmoItemTypeForWeapon(bot.weapon))bot.reserveAmmo=(bot.reserveAmmo||0)+30;
+    else if(SCOPES[item.type])bot.equippedScope=item.type;
+    else if(item.type.startsWith('body_'))bot.equippedBodyArmor=item.type;
+    else if(item.type.startsWith('helmet_'))bot.equippedHelmet=item.type;
+    else if(item.type==='bandage' || isMedkitItemType(item.type))bot.hp=Math.min(bot.maxHp,bot.hp+(item.type==='bandage'?20:60));
+    else return false;
+    droppedItems.splice(droppedItems.indexOf(item),1);
+    broadcastData({type:'PICKUP_ITEM',itemId:item.id});
+    if(bot.targetItem===item)bot.targetItem=null;
+    return true;
+}
+
+function updateBotLoot(bot,brain,diff) {
+    if(bot.targetItem && selectedMode==='br' && Math.hypot(bot.targetItem.x-zone.x,bot.targetItem.y-zone.y)>zone.radius-Math.min(260,zone.radius*.25))bot.targetItem=null;
+    if(!bot.targetItem || !droppedItems.includes(bot.targetItem) || !Number.isFinite(botLootPriority(bot,bot.targetItem)))bot.targetItem=chooseBotLoot(bot);
+    if(!bot.targetItem)return false;
+    const item=bot.targetItem;
+    brain.state='loot';
+    if(!botPickupItem(bot,item)){
+        moveBotToward(bot,item,1.85*diff.speedMult,'walk');
+        botPickupItem(bot,item);
+    }
+    return true;
+}
+
+function updateBotStuckRecovery(bot, brain, nowPerf) {
+    if(!brain.movementRequested){brain.lastX=bot.x;brain.lastY=bot.y;brain.stillSince=nowPerf;return;}
+    const moved = Math.hypot(bot.x - brain.lastX, bot.y - brain.lastY);
+
+    if (moved > 1.2) {
+        brain.lastX = bot.x;
+        brain.lastY = bot.y;
+        brain.stillSince = nowPerf;
+        return;
+    }
+
+    // 명령은 계속 있는데 약 0.55초 이상 제자리면 바로 복구.
+    if (nowPerf - brain.stillSince > 550) {
+        recoverStuckBot(bot);
+        brain.patrol = null;
+        brain.cover = null;
+        brain.strafeDir *= -1;
+        brain.lastX = bot.x;
+        brain.lastY = bot.y;
+        brain.stillSince = nowPerf;
+    }
+}
+
+function chooseBotZoneGoal(bot,brain) {
+    const cached=brain.zoneGoal;
+    if(cached && Math.hypot(bot.x-cached.x,bot.y-cached.y)>22 &&
+        Math.hypot(cached.x-zone.x,cached.y-zone.y)<Math.hypot(bot.x-zone.x,bot.y-zone.y)-5 &&
+        !checkBotNavigationCollision(cached.x,cached.y,18))return cached;
+    const d=Math.hypot(zone.x-bot.x,zone.y-bot.y),base=Math.atan2(zone.y-bot.y,zone.x-bot.x);
+    let best=null,score=Infinity;
+    // 먼 중심점 하나 대신 장애물 밖의 가까운 경유점을 선택한다.
+    for(const len of [Math.min(360,Math.max(10,d-zone.radius*.45)),Math.min(d,160),Math.min(d,80),Math.min(d,40),d*.65]){
+        for(const off of [0,.35,-.35,.7,-.7,1.05,-1.05,1.4,-1.4]){
+            const x=bot.x+Math.cos(base+off)*len,y=bot.y+Math.sin(base+off)*len;
+            const remaining=Math.hypot(x-zone.x,y-zone.y);
+            if(remaining>=d-Math.min(5,d*.2) || checkBotNavigationCollision(x,y,18) || getHouseContainingPoint(x,y))continue;
+            const cost=remaining+Math.abs(off)*20;
+            if(cost<score){score=cost;best={x,y};}
+        }
+    }
+    // 집 내부에서는 문 밖까지 먼저 나간 뒤 안전지대 경로를 다시 고른다.
+    const house=getHouseContainingPoint(bot.x,bot.y);
+    brain.zoneGoal=best || (house?getHouseDoorApproachPoint(house,true):null);
+    return brain.zoneGoal;
+}
+
+function findBotCoverTactic(bot,enemy) {
+    let best=null,score=Infinity;
+    const candidates=[];
+    const old=findBotCoverPoint(bot,enemy);if(old)candidates.push(old);
+    for(const o of nearbyObstacles(bot.x-360,bot.y-360,bot.x+360,bot.y+360)){
+        const pad=(o.type==='tree'?TREE_HITBOX_PADDING:0)+24;
+        for(const x of [o.x-pad,o.x+o.w+pad])for(const y of [o.y-pad,o.y+o.h+pad])candidates.push({x,y});
+        candidates.push({x:o.x-pad,y:o.y+o.h/2},{x:o.x+o.w+pad,y:o.y+o.h/2},
+            {x:o.x+o.w/2,y:o.y-pad},{x:o.x+o.w/2,y:o.y+o.h+pad});
+    }
+    for(const cover of candidates){
+        const distance=Math.hypot(cover.x-bot.x,cover.y-bot.y);
+        if(distance>360 || hasLineOfSight(enemy,cover) || !botSegmentClear(bot,cover))continue;
+        if(selectedMode==='br' && Math.hypot(cover.x-zone.x,cover.y-zone.y)>zone.radius-30)continue;
+        for(const radius of [36,64,96])for(let i=0;i<16;i++){
+            const a=i*Math.PI/8,peek={x:cover.x+Math.cos(a)*radius,y:cover.y+Math.sin(a)*radius};
+            if(!botSegmentClear(cover,peek) || !hasLineOfSight(peek,enemy))continue;
+            if(selectedMode==='br' && Math.hypot(peek.x-zone.x,peek.y-zone.y)>zone.radius-30)continue;
+            const cost=distance+radius*.5;
+            if(cost<score){score=cost;best={cover,peek,enemyId:enemy.id,enemy:{...enemy},phase:'approach',until:0,expires:Date.now()+6500};}
+        }
+    }
+    return best;
+}
+
+function updateBotCoverCombat(bot,brain,enemy,diff,now,dt,visible=true) {
+    if(!botHasUsableAmmo(bot) || bot.isReloading)return false;
+    let tactic=brain.tacticalCover;
+    if(tactic && (now>tactic.expires || tactic.enemyId!==enemy.id || Math.hypot(tactic.enemy.x-enemy.x,tactic.enemy.y-enemy.y)>180))tactic=brain.tacticalCover=null;
+    if(!tactic){
+        if(!visible || now<(brain.coverSearchAt||0))return false;
+        brain.coverSearchAt=now+1800;
+        tactic=brain.tacticalCover=findBotCoverTactic(bot,enemy);
+    }
+    if(!tactic)return false;
+    const cover=tactic.cover,peek=tactic.peek;
+    if(checkBotNavigationCollision(cover.x,cover.y,15) || !botSegmentClear(cover,peek)){brain.tacticalCover=null;return false;}
+    brain.state='cover_combat';
+    if(tactic.phase==='approach' || tactic.phase==='return'){
+        moveBotToward(bot,cover,3.2*diff.speedMult,'sprint');
+        if(Math.hypot(bot.x-cover.x,bot.y-cover.y)<8){tactic.phase='hide';tactic.until=now+400+Math.random()*500;}
+    }else if(tactic.phase==='hide'){
+        bot.isMoving=false;brain.movementRequested=false;bot.movementMode='walk';
+        if(now>=tactic.until)tactic.phase='peek';
+    }else if(tactic.phase==='peek'){
+        moveBotToward(bot,peek,1.7*diff.speedMult,'walk');
+        if(Math.hypot(bot.x-peek.x,bot.y-peek.y)<8){tactic.phase='fire';tactic.until=now+650+Math.random()*550;}
+    }else if(tactic.phase==='fire'){
+        bot.isMoving=false;brain.movementRequested=false;bot.movementMode='walk';
+        if(now>=tactic.until)tactic.phase='return';
+    }
+    // 다시 몸을 내민 자리에서 한 번 더 인지 갱신을 기다린 뒤 마지막 목격 방향으로 수색한다.
+    if(tactic.phase==='fire'){
+        if(visible)tactic.missingSince=0;
+        else {
+            if(!tactic.missingSince)tactic.missingSince=now;
+            if(now-tactic.missingSince>=250 && brain.lastKnown){
+                brain.tacticalCover=null;
+                brain.cover=null;
+                brain.coverSearchAt=now+1600;
+                brain.searchAfterPeekUntil=now+4200;
+                brain.predictedUntil=brain.searchAfterPeekUntil;
+                brain.state='predictive_search';
+                bot._route=null;
+                return false;
+            }
+        }
+    }
+    // 엄폐 이동과 복귀 중에도 보이는 적을 조준하며 사격한다.
+    if(visible)updateHumanBotAim(bot,brain,enemy,diff,now,dt);
+    else turnBotAim(bot,brain,Math.atan2(enemy.y-bot.y,enemy.x-bot.x),dt);
+    return true;
+}
+
+let botRouteDeadline=0,botUpdateCursor=0;
+function updateAI() {
+    if(!isHost || isSpawnSelecting) return;
+    const perfNow=performance.now();
+    if(perfNow-lastAIUpdateAt<AI_UPDATE_INTERVAL) return;
+    const aimDt=Math.min(.08,Math.max(.016,(perfNow-lastAIUpdateAt)/1000));
+    lastAIUpdateAt=perfNow;
+    const now=Date.now();
+    const diff=AI_DIFFICULTY[aiDifficulty] || AI_DIFFICULTY.easy;
+    botRouteDeadline=performance.now()+5;
+
+    botUpdateCursor=(botUpdateCursor+1)%Math.max(1,aiBots.length);
+    for(let step=0;step<aiBots.length;step++){
+        const i=(step+botUpdateCursor)%aiBots.length;
+        const bot=aiBots[i];
+        if(bot.isDead||bot.isDowned) continue;
+        const brain=ensureBotBrain(bot);
+        updateBotStuckRecovery(bot,brain,perfNow);
+        brain.movementRequested=false;
+        bot.isMoving=false;
+        if(bot.hp<brain.lastHp) brain.hurtUntil=now+1300;
+        brain.lastHp=bot.hp;
+        try {
+
+        let returningToZone=false;
+        // 안전지대로 이동해도 적 관측과 사격은 계속한다.
+        if(selectedMode==='br'){
+            const dz=Math.hypot(bot.x-zone.x,bot.y-zone.y);
+            if(dz>zone.radius){
+                applyBattleDamage(bot,0.3*zoneStage,null);
+                if(bot.isDead||bot.isDowned)continue;
+            }
+            const margin=Math.min(260,zone.radius*(zone.radius<220?.08:.25));
+            if(dz>zone.radius-margin)brain.returningToZone=true;
+            else if(dz<zone.radius-margin*1.5)brain.returningToZone=false;
+            if(brain.returningToZone){
+                returningToZone=true;
+                brain.state='zone';brain.tacticalCover=null;
+                const zoneGoal=chooseBotZoneGoal(bot,brain);
+                if(zoneGoal)moveBotToward(bot,zoneGoal,2.7*diff.speedMult,'sprint');
+                else {brain.zoneGoal=null;brain.movementRequested=false;}
+            }
+        }
+
+        // 가까이 있는 필요한 물건은 전투/소리 조사로 상태가 바뀌어도 먼저 줍는다.
+        for(const item of droppedItems.slice()){
+            if(Math.hypot(item.x-bot.x,item.y-bot.y)<=36 && Number.isFinite(botLootPriority(bot,item)))botPickupItem(bot,item);
+        }
+        listenForBotThreats(bot,brain,now);
+        listenForBotFootsteps(bot,brain,now);
+
+        const enemy=chooseBotEnemy(bot,brain);
+        if(enemy){
+            brain.searchAfterPeekUntil=0;
+            const range=getBotWeaponRange(bot);
+            const d=Math.hypot(enemy.x-bot.x,enemy.y-bot.y);
+            if(brain.targetId!==enemy.id || now-brain.lastSeenAt>650){
+                brain.lastEnemyX=null; brain.lastEnemyY=null; brain.enemyVx=0; brain.enemyVy=0;
+                brain.burstLeft=0; brain.burstPauseUntil=0;
+                brain.targetId=enemy.id;
+                brain.reactionUntil=now+Math.max(120,diff.delay*(0.55+Math.random()*.45));
+                brain.strafeDir=Math.random()<.5?-1:1;
+            }
+            // 적을 보고 있는 동안 위치 변화량을 저장해, 시야에서 사라진 뒤 이동 방향을 예측한다.
+            if (brain.lastEnemyX !== null && brain.lastEnemyY !== null) {
+                const dt = Math.max(16, now - (brain._lastEnemySampleAt || now));
+                const rawVx = (enemy.x - brain.lastEnemyX) / dt;
+                const rawVy = (enemy.y - brain.lastEnemyY) / dt;
+                // 순간 튐을 줄이기 위한 간단한 저역통과 필터
+                brain.enemyVx = (brain.enemyVx || 0) * 0.65 + Math.max(-.5,Math.min(.5,rawVx)) * 0.35;
+                brain.enemyVy = (brain.enemyVy || 0) * 0.65 + Math.max(-.5,Math.min(.5,rawVy)) * 0.35;
+            }
+            brain.lastEnemyX = enemy.x;
+            brain.lastEnemyY = enemy.y;
+            brain._lastEnemySampleAt = now;
+            brain.lastKnown = {x:enemy.x,y:enemy.y};
+            brain.lastSeenAt = now;
+            brain.predictedUntil = now + 4200;
+            bot.investigateTarget=null;
+
+            if(returningToZone){
+                if(botHasGun(bot)){
+                    if(bot.clipAmmo<=0 && bot.reserveAmmo>0 && !bot.isReloading)reloadWeapon(bot);
+                    updateHumanBotAim(bot,brain,enemy,diff,now,aimDt);
+                }
+                continue;
+            }
+
+            // 적을 만났더라도 총이 없거나 사용할 탄약이 전혀 없으면 싸우지 않고 무장부터 한다.
+            // 장전 가능한 예비탄이 있으면 아이템을 찾지 않고 즉시 재장전한다.
+            if(!botHasGun(bot) || !botHasUsableAmmo(bot)) {
+                if(botHasGun(bot) && (bot.clipAmmo||0)<=0 && (bot.reserveAmmo||0)>0) {
+                    if(!bot.isReloading) reloadWeapon(bot);
+                    brain.state='reload';
+                    const away=Math.atan2(bot.y-enemy.y,bot.x-enemy.x);
+                    moveAIBot(bot,Math.cos(away)*1.65*diff.speedMult,Math.sin(away)*1.65*diff.speedMult);
+                    continue;
+                }
+                const supply=chooseBotEmergencySupply(bot);
+                if(supply) {
+                    bot.targetItem=supply;
+                    brain.state='resupply';
+                    // 적에게 등을 완전히 보이지 않도록 이동 중에는 적 쪽을 잠깐 바라본다.
+                    moveBotToward(bot,supply,2.45*diff.speedMult,'sprint');
+                    if(Math.hypot(bot.x-supply.x,bot.y-supply.y)<36) botPickupItem(bot,supply);
+                    continue;
+                }
+                // 주변에 보급품이 없으면 무장 없이 돌진하지 않고 거리를 벌린다.
+                brain.state='disengage';
+                const away=Math.atan2(bot.y-enemy.y,bot.x-enemy.x);
+                moveAIBot(bot,Math.cos(away)*2.25*diff.speedMult,Math.sin(away)*2.25*diff.speedMult);
+                continue;
+            }
+            bot.targetItem=null;
+
+            // 최종 원에서는 총의 평소 교전 거리까지 물러날 공간이 없다.
+            if(selectedMode==='br' && zone.radius<range.min*1.5){
+                brain.state='combat';brain.tacticalCover=null;brain.movementRequested=false;bot.isMoving=false;
+                if(bot.clipAmmo<=0 && bot.reserveAmmo>0 && !bot.isReloading)reloadWeapon(bot);
+                updateHumanBotAim(bot,brain,enemy,diff,now,aimDt);
+                continue;
+            }
+
+            // 탄창이 비었거나 매우 적으면 엄폐하면서 재장전한다.
+            const w=WEAPONS[bot.weapon];
+            if(bot.isReloading || (w && bot.clipAmmo<=Math.max(0,Math.floor(w.maxClip*.12)) && bot.reserveAmmo>0)){
+                if(!bot.isReloading) reloadWeapon(bot);
+                if(!brain.cover || now>brain.coverUntil){ brain.cover=findBotCoverPoint(bot,enemy); brain.coverUntil=now+1800; }
+                if(brain.cover) moveBotToward(bot,brain.cover,2.35*diff.speedMult,'sprint');
+                else {
+                    const away=Math.atan2(bot.y-enemy.y,bot.x-enemy.x);
+                    moveAIBot(bot,Math.cos(away)*1.9*diff.speedMult,Math.sin(away)*1.9*diff.speedMult);
+                }
+                brain.state='reload';
+                continue;
+            }
+
+            // 체력이 낮으면 가까운 엄폐물을 우선한다.
+            if(bot.hp < bot.maxHp*.38*brain.personality.caution || now<brain.hurtUntil){
+                if(!brain.cover || now>brain.coverUntil){ brain.cover=findBotCoverPoint(bot,enemy); brain.coverUntil=now+2200; }
+                if(brain.cover){ brain.state='retreat'; moveBotToward(bot,brain.cover,2.55*diff.speedMult,'sprint'); continue; }
+            }
+
+            if(updateBotCoverCombat(bot,brain,enemy,diff,now,aimDt))continue;
+            brain.state='combat';
+            // 조준 방향은 updateHumanBotAim에서만 갱신한다.
+            if(d>range.ideal*1.18/brain.personality.aggression){
+                moveBotToward(bot,enemy,2.25*diff.speedMult,'sprint');
+            } else if(d<range.min){
+                const away=Math.atan2(bot.y-enemy.y,bot.x-enemy.x);
+                bot.movementMode='sprint';
+                moveAIBot(bot,Math.cos(away)*2.15*diff.speedMult,Math.sin(away)*2.15*diff.speedMult);
+            } else if(now<brain.holdUntil) {
+                bot.movementMode='walk';
+            } else {
+                if(now>brain.strafeUntil && Math.random()<.3) brain.holdUntil=now+220+Math.random()*480;
+                if(now>brain.strafeUntil){brain.strafeUntil=now+550+Math.random()*750;if(Math.random()<.35)brain.strafeDir*=-1;}
+                const a=Math.atan2(enemy.y-bot.y,enemy.x-bot.x)+brain.strafeDir*Math.PI/2;
+                bot.movementMode='walk';
+                moveAIBot(bot,Math.cos(a)*1.35*diff.speedMult,Math.sin(a)*1.35*diff.speedMult);
+                // 조준 방향은 updateHumanBotAim에서만 갱신한다.
+            }
+
+            updateHumanBotAim(bot,brain,enemy,diff,now,aimDt);
+
+            continue;
+        }
+
+        if(returningToZone)continue;
+
+        // 엄폐 뒤에서는 마지막으로 목격한 위치만 사용해 다음 노출 동작을 이어간다.
+        if(brain.tacticalCover && brain.lastKnown && now-brain.lastSeenAt<4200 &&
+            updateBotCoverCombat(bot,brain,{id:brain.targetId,...brain.lastKnown},diff,now,aimDt,false))continue;
+
+        // 무장 전에는 소리나 사라진 적을 쫓아 보급 목표를 포기하지 않는다.
+        // 이미 집 안에서 확보한 보급 목표도 보이는 적이 없으면 끝까지 처리한다.
+        const lootHouse=getHouseContainingPoint(bot.x,bot.y);
+        if((!botHasUsableAmmo(bot) || (lootHouse && !bot.isReloading && now>=(brain.searchAfterPeekUntil||0))) && updateBotLoot(bot,brain,diff))continue;
+
+        // 적이 가려졌다고 재장전/후퇴 중 엄폐 밖으로 바로 뛰어나가지 않는다.
+        if(brain.cover && (bot.isReloading || (brain.state==='retreat' && now<brain.coverUntil))) {
+            if(Math.hypot(bot.x-brain.cover.x,bot.y-brain.cover.y)>18)
+                moveBotToward(bot,brain.cover,2.1*diff.speedMult,'walk');
+            else {
+                bot.movementMode='walk';
+                if(brain.lastKnown) bot.angle=Math.atan2(brain.lastKnown.y-bot.y,brain.lastKnown.x-bot.x);
+            }
+            continue;
+        }
+        // 적을 한 번 봤다면 시야에서 사라져도 마지막 이동 방향을 추정해서 계속 추적한다.
+        if (brain.lastKnown && now < (brain.predictedUntil || brain.lastSeenAt + 4200)) {
+            brain.state='predictive_search';
+
+            const unseenMs = Math.max(0, now - brain.lastSeenAt);
+            // 너무 멀리 과예측하지 않도록 약 0.6~1.4초 앞까지만 본다.
+            const predictMs = Math.min(1400, 600 + unseenMs * 0.45);
+            let px = brain.lastKnown.x + (brain.enemyVx || 0) * predictMs;
+            let py = brain.lastKnown.y + (brain.enemyVy || 0) * predictMs;
+
+            px = Math.max(35, Math.min(WORLD_SIZE - 35, px));
+            py = Math.max(35, Math.min(WORLD_SIZE - 35, py));
+
+            // 예측 위치가 장애물 안이면 마지막 위치와 예측점 사이에서 갈 수 있는 지점을 찾는다.
+            if (checkBotNavigationCollision(px, py, 14, null)) {
+                let found = null;
+                for (let k = 8; k >= 1; k--) {
+                    const t = k / 8;
+                    const tx = brain.lastKnown.x + (px - brain.lastKnown.x) * t;
+                    const ty = brain.lastKnown.y + (py - brain.lastKnown.y) * t;
+                    if (!checkBotNavigationCollision(tx, ty, 14, null)) {
+                        found = {x:tx, y:ty};
+                        break;
+                    }
+                }
+                if (found) { px = found.x; py = found.y; }
+                else { px = brain.lastKnown.x; py = brain.lastKnown.y; }
+            }
+
+            brain.predictedPoint = {x:px, y:py};
+            moveBotToward(bot, brain.predictedPoint, 2.15 * diff.speedMult, 'sprint');
+
+            // 예측 지점에 도착하면 잠깐 주변을 훑고, 오래 못 찾으면 추적을 종료한다.
+            if (Math.hypot(bot.x - px, bot.y - py) < 58) {
+                brain.movementRequested=false;
+                bot.isMoving=false;
+                bot.angle=brain.aimAngle+Math.sin(now*.002)*.5;
+                if (unseenMs > 3000) {
+                    brain.lastKnown = null;
+                    brain.targetId = null;
+                    brain.predictedPoint = null;
+                    brain.enemyVx *= .4;
+                    brain.enemyVy *= .4;
+                }
+            }
+            continue;
+        }
+        brain.targetId=null;
+
+        if(bot.investigateTarget && now-bot.investigateTarget.time<5200){
+            brain.state='investigate';
+            moveBotToward(bot,bot.investigateTarget,1.95*diff.speedMult,'sprint');
+            if(Math.hypot(bot.x-bot.investigateTarget.x,bot.y-bot.investigateTarget.y)<60) bot.investigateTarget=null;
+            continue;
+        }
+
+        if(followBotSquad(bot,brain,diff,now,true))continue;
+        if(updateBotLoot(bot,brain,diff))continue;
+
+        // 탄약이 있고 탄창이 비어 있으면 안전할 때 미리 재장전한다.
+        if(bot.weapon && bot.clipAmmo<WEAPONS[bot.weapon].maxClip*.6 && bot.reserveAmmo>0 && !bot.isReloading) reloadWeapon(bot);
+
+        if(followBotSquad(bot,brain,diff,now))continue;
+
+        // 목적 없는 직선 이동 대신 짧은 순찰 목표를 만들어 집/나무 사이를 돌아다닌다.
+        if(!brain.patrol || now>brain.patrolUntil || Math.hypot(bot.x-brain.patrol.x,bot.y-brain.patrol.y)<60){
+            let found=null;
+            for(let a=0;a<16;a++){
+                const ang=Math.random()*Math.PI*2, len=180+Math.random()*520;
+                const x=Math.max(40,Math.min(WORLD_SIZE-40,bot.x+Math.cos(ang)*len));
+                const y=Math.max(40,Math.min(WORLD_SIZE-40,bot.y+Math.sin(ang)*len));
+                if(!checkBotNavigationCollision(x,y,15,null)){found={x,y};break;}
+            }
+            brain.patrol=found||{x:WORLD_SIZE/2,y:WORLD_SIZE/2};
+            brain.patrolUntil=now+4500+Math.random()*4500;
+        }
+        brain.state='patrol';
+        moveBotToward(bot,brain.patrol,1.45*diff.speedMult,'walk');
+        } finally {
+            // 이동과 시선을 독립적으로 처리한다. 적이 없을 때만 진행 방향을 바라본다.
+            if(brain.state!=='combat' && brain.state!=='cover_combat') {
+                let desired=bot.isMoving && Number.isFinite(bot.moveAngle)?bot.moveAngle:brain.aimAngle;
+                if(brain.lastKnown && now-brain.lastSeenAt<1200)
+                    desired=Math.atan2(brain.lastKnown.y-bot.y,brain.lastKnown.x-bot.x);
+                if(bot.investigateTarget && now-bot.investigateTarget.time<1200)
+                    desired=Math.atan2(bot.investigateTarget.y-bot.y,bot.investigateTarget.x-bot.x);
+                turnBotAim(bot,brain,desired,aimDt);
+            }
+        }
+    }
+}
+
+
+function shouldRenderCombatEntityToLocal(entity) {
+    if (!entity || entity === myPlayer) return true;
+    if (!myPlayer || myPlayer.isDead || isSpectating) return true;
+
+    // 아군은 항상 표시한다.
+    if (typeof areAllies === 'function' && areAllies(myPlayer, entity)) return true;
+
+    // 적은 몸 중심과 가장자리 샘플 중 하나라도 실제로 시야가 열려 있을 때만 표시.
+    // 벽/나무 뒤에 완전히 가려졌다면 이름/체력바/무기까지 drawPlayer 전체가 실행되지 않는다.
+    const r = 10;
+    const samples = [
+        {x:entity.x,   y:entity.y},
+        {x:entity.x-r, y:entity.y},
+        {x:entity.x+r, y:entity.y},
+        {x:entity.x,   y:entity.y-r},
+        {x:entity.x,   y:entity.y+r}
+    ];
+    for (const s of samples) {
+        if (hasLineOfSight(myPlayer, s)) return true;
+    }
+    return false;
+}
+
+
+function returnToRoomAfterGame() {
+    document.getElementById('spectatorSwitch').style.display='none';
+    gameStarted=false;
+    gameEnded=false;
+    const startButton=document.getElementById('startButton');
+    if(startButton){startButton.disabled=false;startButton.style.display=isHost?'block':'none';}
+    for(const timer of [respawnInterval,spawnTimerInterval,zoneTimerInterval,weaponSelectInterval])if(timer)clearInterval(timer);
+    respawnInterval=spawnTimerInterval=zoneTimerInterval=weaponSelectInterval=null;
+    renderRoomRoles();
+    isRespawning=false;
+    isSpectating=false;
+    isSpawnSelecting=false;
+
+    bullets.length=0;
+    aiBots.length=0;
+    guestBotById.clear();
+    gunshotEvents.length=0;
+    footstepEvents.length=0;footstepTracks.clear();
+
+    // 게임 화면/결과창 숨기기
+    const idsToHide=['victoryOverlay','rankingScreen','deathScreen','spectatorUI','gameOverScreen','spectateHUD','respawnHUD','spawnSelectHUD','fullMapOverlay','inventory','reviveHUD'];
+    reviveSessions.clear();myPlayer.reviveHeld=false;
+    if(window._returnMenuTimer){clearTimeout(window._returnMenuTimer);window._returnMenuTimer=null;}
+    for(const id of idsToHide){
+        const el=document.getElementById(id);
+        if(el) el.style.display='none';
+    }
+
+    if(canvas) canvas.style.display='none';
+    const minimap=document.getElementById('minimap');
+    if(minimap) minimap.style.display='none';
+
+    // 메인 메뉴가 아니라 기존 방 UI로 복귀
+    const ui=document.getElementById('ui');
+    if(ui) ui.style.display='block';
+
+    const roomLobby =
+        document.getElementById('roomLobby') ||
+        document.getElementById('lobby') ||
+        document.getElementById('room') ||
+        document.getElementById('waitingRoom');
+    if(roomLobby) roomLobby.style.display='block';
+
+    // 기존 방 연결은 끊지 않는다.
+    // 방 코드/Peer 연결을 유지해서 모든 플레이어가 같은 방으로 돌아오게 한다.
+    if(isHost){
+        broadcastData({type:'RETURN_TO_ROOM'});
+    }
+
+    // 호스트는 현재 방 설정을 다시 보내서 전원 상태를 맞춘다.
+    if(isHost){
+        setTimeout(()=>{
+            try{
+                broadcastData({
+                    type:'ROOM_SETTINGS',
+                    mode:selectedMode,
+                    aiDiff:aiDifficulty,
+                    mapSeed:currentMapSeed
+                });
+            }catch(e){}
+        },50);
+    }
+}
+
+const NETWORK_ENTITY_KEYS = [
+    'id','x','y','angle','speed','hp','maxHp','kills','deaths','isDead','name',
+    'weapon','clipAmmo','reserveAmmo','isReloading','reloadStartedAt',
+    'equippedScope','equippedHelmet','equippedBodyArmor',
+    'isAiming','isShooting','lastShootTime','isMoving','movementMode','moveAngle',
+    'isDowned','downedUntil','reviveHeld','reviveProgress','teamId','team'
+];
+
+function networkEntityState(entity) {
+    const state={};
+    for(const key of NETWORK_ENTITY_KEYS) {
+        if(entity[key] !== undefined) state[key]=typeof entity[key]==='number' && ['x','y','angle','moveAngle'].includes(key) ? Math.round(entity[key]*100)/100 : entity[key];
+    }
+    return state;
+}
+
+const NETWORK_BOT_KEYS = [
+    'id','x','y','angle','hp','maxHp','kills','deaths','isDead','name','weapon',
+    'clipAmmo','isReloading','reloadStartedAt','equippedHelmet','equippedBodyArmor',
+    'isMoving','movementMode','moveAngle','isDowned','downedUntil','teamId','team'
+];
+
+function botNetworkState(bot) {
+    const state={};
+    for(const key of NETWORK_BOT_KEYS) if(bot[key] !== undefined) state[key]=typeof bot[key]==='number' && ['x','y','angle','moveAngle'].includes(key) ? Math.round(bot[key]*100)/100 : bot[key];
+    return state;
+}
+
+// 게스트 AI 동기화는 "근처 빠른 갱신 + 전체 저빈도 보정"으로 나눈다.
+// 매 패킷마다 100마리 배열/Map을 새로 만들지 않아 참가자 프레임 저하를 줄인다.
+// 게스트에서 다른 실제 플레이어도 네트워크 좌표를 바로 덮어쓰지 않고 렌더 좌표를 부드럽게 따라간다.
+function applyNetworkPlayerSnapshot(snap) {
+    if(isHost || !snap || !snap.id || snap.id===myPlayer.id) return;
+    let p=remotePlayers[snap.id];
+    if(!p){
+        p={...snap};
+        p._netTargetX=Number.isFinite(snap.x)?snap.x:0;
+        p._netTargetY=Number.isFinite(snap.y)?snap.y:0;
+        p._netTargetAngle=Number.isFinite(snap.angle)?snap.angle:0;
+        p._netSnapAt=performance.now();
+        p._netVx=0;p._netVy=0;
+        remotePlayers[snap.id]=p;
+        return;
+    }
+    const now=performance.now();
+    const tx=Number.isFinite(snap.x)?snap.x:(Number.isFinite(p._netTargetX)?p._netTargetX:p.x);
+    const ty=Number.isFinite(snap.y)?snap.y:(Number.isFinite(p._netTargetY)?p._netTargetY:p.y);
+    const prevTx=Number.isFinite(p._netTargetX)?p._netTargetX:(Number.isFinite(p.x)?p.x:tx);
+    const prevTy=Number.isFinite(p._netTargetY)?p._netTargetY:(Number.isFinite(p.y)?p.y:ty);
+    const elapsed=Math.max(16,Math.min(250,now-(p._netSnapAt||now-66)));
+    p._netVx=(tx-prevTx)/elapsed;
+    p._netVy=(ty-prevTy)/elapsed;
+    p._netSnapAt=now;
+
+    const dx=tx-(Number.isFinite(p.x)?p.x:tx),dy=ty-(Number.isFinite(p.y)?p.y:ty);
+    const lifeChanged=!!p.isDead!==!!snap.isDead || !!p.isDowned!==!!snap.isDowned;
+    for(const key of NETWORK_ENTITY_KEYS){
+        if(key==='x'||key==='y'||key==='angle'||key==='moveAngle')continue;
+        if(snap[key]!==undefined)p[key]=snap[key];
+    }
+    p._netTargetX=tx;p._netTargetY=ty;
+    if(Number.isFinite(snap.angle))p._netTargetAngle=snap.angle;
+    if(Number.isFinite(snap.moveAngle))p._netTargetMoveAngle=snap.moveAngle;
+    if(dx*dx+dy*dy>NET_PLAYER_SNAP_DISTANCE*NET_PLAYER_SNAP_DISTANCE||lifeChanged||!Number.isFinite(p.x)||!Number.isFinite(p.y)){
+        p.x=tx;p.y=ty;
+        if(Number.isFinite(snap.angle))p.angle=snap.angle;
+        if(Number.isFinite(snap.moveAngle))p.moveAngle=snap.moveAngle;
+    }
+}
+
+function updateGuestPlayerInterpolation(){
+    if(isHost)return;
+    const now=performance.now();
+    const dt=Math.min(50,Math.max(0,now-lastPlayerInterpolationAt));
+    lastPlayerInterpolationAt=now;
+    const alpha=1-Math.exp(-dt/NET_PLAYER_SMOOTH_MS);
+    for(const p of Object.values(remotePlayers)){
+        if(!p||p.isDead)continue;
+        if(!Number.isFinite(p.x)||!Number.isFinite(p.y))continue;
+        const age=Math.min(NET_PLAYER_PREDICT_MS,Math.max(0,now-(p._netSnapAt||now)));
+        const moving=p.isMoving||p.movementMode==='sprint';
+        const predict=moving?age:0;
+        const tx=(Number.isFinite(p._netTargetX)?p._netTargetX:p.x)+(Number.isFinite(p._netVx)?p._netVx:0)*predict;
+        const ty=(Number.isFinite(p._netTargetY)?p._netTargetY:p.y)+(Number.isFinite(p._netVy)?p._netVy:0)*predict;
+        p.x+=(tx-p.x)*alpha;
+        p.y+=(ty-p.y)*alpha;
+        if(Number.isFinite(p._netTargetAngle)){
+            const a=Number.isFinite(p.angle)?p.angle:p._netTargetAngle;
+            p.angle=a+shortestAngleDelta(a,p._netTargetAngle)*Math.min(1,alpha*1.35);
+        }
+        if(Number.isFinite(p._netTargetMoveAngle)){
+            const a=Number.isFinite(p.moveAngle)?p.moveAngle:p._netTargetMoveAngle;
+            p.moveAngle=a+shortestAngleDelta(a,p._netTargetMoveAngle)*Math.min(1,alpha*1.35);
+        }
+    }
+}
+
+function rebuildGuestBotIndex() {
+    guestBotById.clear();
+    for(const bot of aiBots) if(bot && bot.id) guestBotById.set(bot.id, bot);
+}
+
+function applyNetworkBotSnapshots(snapshotBots, replaceAll=false) {
+    if(isHost || !Array.isArray(snapshotBots)) return;
+    if(guestBotById.size === 0 && aiBots.length) rebuildGuestBotIndex();
+    const seen = replaceAll ? new Set() : null;
+
+    for(const snap of snapshotBots) {
+        if(!snap || !snap.id) continue;
+        if(seen) seen.add(snap.id);
+        let bot = guestBotById.get(snap.id);
+        if(!bot) {
+            bot = {...snap};
+            bot._netTargetX = Number.isFinite(snap.x) ? snap.x : 0;
+            bot._netTargetY = Number.isFinite(snap.y) ? snap.y : 0;
+            bot._netTargetAngle = Number.isFinite(snap.angle) ? snap.angle : 0;
+            bot._netTargetMoveAngle = Number.isFinite(snap.moveAngle) ? snap.moveAngle : bot._netTargetAngle;
+            bot._netSnapAt=performance.now(); bot._netVx=0; bot._netVy=0;
+            aiBots.push(bot);
+            guestBotById.set(bot.id, bot);
+            continue;
+        }
+
+        const targetX = Number.isFinite(snap.x) ? snap.x : bot.x;
+        const targetY = Number.isFinite(snap.y) ? snap.y : bot.y;
+        const snapNow=performance.now();
+        const prevTargetX=Number.isFinite(bot._netTargetX)?bot._netTargetX:targetX;
+        const prevTargetY=Number.isFinite(bot._netTargetY)?bot._netTargetY:targetY;
+        const snapDt=Math.max(20,Math.min(350,snapNow-(bot._netSnapAt||snapNow-125)));
+        bot._netVx=(targetX-prevTargetX)/snapDt;
+        bot._netVy=(targetY-prevTargetY)/snapDt;
+        bot._netSnapAt=snapNow;
+        const dx=targetX-(Number.isFinite(bot.x)?bot.x:targetX);
+        const dy=targetY-(Number.isFinite(bot.y)?bot.y:targetY);
+        const jumpSq=dx*dx+dy*dy;
+        const lifeStateChanged = !!bot.isDead !== !!snap.isDead || !!bot.isDowned !== !!snap.isDowned;
+
+        for(const key of NETWORK_BOT_KEYS) {
+            if(key==='x'||key==='y'||key==='angle'||key==='moveAngle') continue;
+            if(snap[key] !== undefined) bot[key]=snap[key];
+        }
+        bot._netTargetX = targetX;
+        bot._netTargetY = targetY;
+        if(Number.isFinite(snap.angle)) bot._netTargetAngle = snap.angle;
+        if(Number.isFinite(snap.moveAngle)) bot._netTargetMoveAngle = snap.moveAngle;
+
+        if(jumpSq > NET_BOT_SNAP_DISTANCE*NET_BOT_SNAP_DISTANCE || lifeStateChanged || !Number.isFinite(bot.x) || !Number.isFinite(bot.y)) {
+            bot.x = targetX; bot.y = targetY;
+            if(Number.isFinite(snap.angle)) bot.angle = snap.angle;
+            if(Number.isFinite(snap.moveAngle)) bot.moveAngle = snap.moveAngle;
+        }
+    }
+
+    if(replaceAll && seen) {
+        let w=0;
+        for(let i=0;i<aiBots.length;i++) {
+            const bot=aiBots[i];
+            if(bot && seen.has(bot.id)) aiBots[w++]=bot;
+            else if(bot && bot.id) guestBotById.delete(bot.id);
+        }
+        aiBots.length=w;
+    }
+}
+
+function shortestAngleDelta(from,to) {
+    let d=(to-from)%(Math.PI*2);
+    if(d>Math.PI)d-=Math.PI*2;
+    if(d<-Math.PI)d+=Math.PI*2;
+    return d;
+}
+
+function updateGuestBotInterpolation() {
+    if(isHost) return;
+    const now=performance.now();
+    const dt=Math.min(80,Math.max(0,now-lastBotInterpolationAt));
+    lastBotInterpolationAt=now;
+    const alpha=1-Math.exp(-dt/NET_BOT_SMOOTH_MS);
+    const cx=camera?.x ?? myPlayer.x, cy=camera?.y ?? myPlayer.y;
+    const maxD2=NET_BOT_INTERPOLATE_RADIUS*NET_BOT_INTERPOLATE_RADIUS;
+
+    for(const bot of aiBots) {
+        // 멀리 있어 화면에 보이지 않는 봇은 매 프레임 수학 연산을 하지 않는다.
+        const bx=Number.isFinite(bot.x)?bot.x:bot._netTargetX;
+        const by=Number.isFinite(bot.y)?bot.y:bot._netTargetY;
+        if(Number.isFinite(bx)&&Number.isFinite(by)) {
+            const dx=bx-cx,dy=by-cy;
+            if(dx*dx+dy*dy>maxD2) continue;
+        }
+        const age=Math.min(NET_BOT_PREDICT_MS,Math.max(0,now-(bot._netSnapAt||now)));
+        const moving=bot.isMoving||bot.movementMode==='sprint';
+        const predict=moving?age:0;
+        const targetX=(Number.isFinite(bot._netTargetX)?bot._netTargetX:bot.x)+(Number.isFinite(bot._netVx)?bot._netVx:0)*predict;
+        const targetY=(Number.isFinite(bot._netTargetY)?bot._netTargetY:bot.y)+(Number.isFinite(bot._netVy)?bot._netVy:0)*predict;
+        if(Number.isFinite(targetX)) bot.x += (targetX-bot.x)*alpha;
+        if(Number.isFinite(targetY)) bot.y += (targetY-bot.y)*alpha;
+        if(Number.isFinite(bot._netTargetAngle)) {
+            const a=Number.isFinite(bot.angle)?bot.angle:bot._netTargetAngle;
+            bot.angle = a + shortestAngleDelta(a,bot._netTargetAngle)*Math.min(1,alpha*1.25);
+        }
+        if(Number.isFinite(bot._netTargetMoveAngle)) {
+            const a=Number.isFinite(bot.moveAngle)?bot.moveAngle:bot._netTargetMoveAngle;
+            bot.moveAngle = a + shortestAngleDelta(a,bot._netTargetMoveAngle)*Math.min(1,alpha*1.25);
+        }
+    }
+}
+
+function bulletNetworkState(b) {
+    return {x:b.x,y:b.y,prevX:b.prevX,prevY:b.prevY,ownerId:b.ownerId,shotId:b.shotId};
+}
+
+function updateNetwork() {
+    const now=performance.now();
+    if(isHost) {
+        if(now-lastHostSyncAt < NET_HOST_SYNC_MS) return;
+        lastHostSyncAt=now;
+        const openConnections=Object.values(connections).filter(c=>c && c.open);
+        if(!openConnections.length)return;
+
+        const includeBots = now-lastBotSyncAt >= NET_BOT_SYNC_MS;
+        if(includeBots) lastBotSyncAt=now;
+        const includeAllBots = includeBots && (now-lastFullBotSyncAt >= NET_BOT_FULL_SYNC_MS);
+        if(includeAllBots) lastFullBotSyncAt=now;
+        const includeFullState = now-lastFullStateAt >= NET_FULL_STATE_MS;
+        if(includeFullState) lastFullStateAt=now;
+
+        const playersState=roomHumans().map(networkEntityState);
+        const allBotStates=includeAllBots ? aiBots.map(botNetworkState) : null;
+        const doorsState=includeFullState ? obstacles.filter(h=>h.doorId).map(h=>({doorId:h.doorId,hp:h.doorHp,open:h.doorOpen})) : null;
+        const interestR2=NET_BOT_INTEREST_RADIUS*NET_BOT_INTEREST_RADIUS;
+        const bulletR2=(NET_BOT_INTEREST_RADIUS+1000)*(NET_BOT_INTEREST_RADIUS+1000);
+
+        for(const c of openConnections) {
+            if(connectionBufferedBytes(c)>NET_MAX_BUFFERED_BYTES)continue;
+            const viewer=c.playerId ? remotePlayers[c.playerId] : null;
+            const packet={
+                type:'SYNC',
+                players:playersState,
+                zoneRadius:zone.radius, zoneX:zone.x, zoneY:zone.y,
+                zoneStage, zoneTimer, targetZone, mapSeed:currentMapSeed
+            };
+
+            // 참가자 화면에 필요한 총알만 보내 네트워크 파싱/복사 비용을 줄인다.
+            if(viewer && Number.isFinite(viewer.x) && Number.isFinite(viewer.y)) {
+                packet.bullets=bullets.filter(b=>{
+                    const dx=(b.x||0)-viewer.x,dy=(b.y||0)-viewer.y;
+                    return dx*dx+dy*dy<=bulletR2;
+                }).map(bulletNetworkState);
+            } else packet.bullets=bullets.map(bulletNetworkState);
+
+            if(includeBots) {
+                if(includeAllBots || !viewer || !Number.isFinite(viewer.x) || !Number.isFinite(viewer.y)) {
+                    packet.aiBots=allBotStates || aiBots.map(botNetworkState);
+                    packet.aiBotsFull=true;
+                } else {
+                    const near=[];
+                    const vx=viewer.x,vy=viewer.y;
+                    for(const bot of aiBots) {
+                        const dx=bot.x-vx,dy=bot.y-vy;
+                        if(dx*dx+dy*dy<=interestR2) near.push(botNetworkState(bot));
+                    }
+                    packet.aiBots=near;
+                    packet.aiBotsFull=false;
+                }
+            }
+
+            if(includeFullState) {
+                packet.items=droppedItems;
+                packet.doors=doorsState;
+            }
+            safeSend(c,packet);
+        }
+    } else if(hostConn && hostConn.open) {
+        if(now-lastClientSyncAt < NET_CLIENT_SYNC_MS) return;
+        lastClientSyncAt=now-(now-lastClientSyncAt)%NET_CLIENT_SYNC_MS;
+        safeSend(hostConn,{type:'SYNC',player:networkEntityState(myPlayer)});
+    }
+}
+
+function bulletRectEntry(a,b,r,padding=2){
+    let enter=0,exit=1;
+    for(const axis of ['x','y']){
+        const delta=b[axis]-a[axis],lo=r[axis]-padding,hi=r[axis]+(axis==='x'?r.w:r.h)+padding;
+        if(Math.abs(delta)<1e-9){if(a[axis]<lo||a[axis]>hi)return Infinity;continue;}
+        const t1=(lo-a[axis])/delta,t2=(hi-a[axis])/delta;
+        enter=Math.max(enter,Math.min(t1,t2));exit=Math.min(exit,Math.max(t1,t2));
+        if(enter>exit)return Infinity;
+    }
+    return enter;
+}
+function bulletCircleEntry(a,b,p,radius=25){
+    const dx=b.x-a.x,dy=b.y-a.y,ox=a.x-p.x,oy=a.y-p.y;
+    const c=ox*ox+oy*oy-radius*radius;if(c<=0)return 0;
+    const length=dx*dx+dy*dy;if(length<1e-9)return Infinity;
+    const half=ox*dx+oy*dy,disc=half*half-length*c;if(disc<0)return Infinity;
+    const t=(-half-Math.sqrt(disc))/length;return t>=0&&t<=1?t:Infinity;
+}
+function firstBulletImpact(bullet){
+    const a={x:bullet.prevX,y:bullet.prevY},b={x:bullet.x,y:bullet.y};
+    let wallT=Infinity,door=null;
+    for(const obs of nearbyObstacles(Math.min(a.x,b.x)-2,Math.min(a.y,b.y)-2,Math.max(a.x,b.x)+2,Math.max(a.y,b.y)+2)){
+        const pad=obs.type==='tree'?TREE_HITBOX_PADDING:0;
+        const rects=obs.type==='house'?getHouseBallisticWallRects(obs):[{x:obs.x-pad,y:obs.y-pad,w:obs.w+pad*2,h:obs.h+pad*2}];
+        for(const rect of rects){const entry=bulletRectEntry(a,b,rect);if(entry<wallT){wallT=entry;door=null;}}
+        if(doorClosed(obs)){const entry=bulletRectEntry(a,b,houseDoorRect(obs));if(Number.isFinite(entry)&&entry<=wallT){wallT=entry;door=obs;}}
+    }
+    let target=null,t=wallT;
+    for(const p of [myPlayer,...Object.values(remotePlayers),...aiBots]){
+        if(p.id===bullet.ownerId||p.hp<=0||p.isDead||!botBulletCanDamage(bullet.ownerId,p))continue;
+        const entry=bulletCircleEntry(a,b,p);
+        // 몸의 판정 원이 얇은 벽 밖으로 튀어나와도 벽 너머 대상은 맞지 않는다.
+        if(entry<t && hasLineOfSight(a,p)){t=entry;target=p;}
+    }
+    return {target,t,door:target?null:door,wall:Number.isFinite(wallT)&&!target};
+}
+
+const reviveSessions=new Map();
+const REVIVE_RANGE=80,REVIVE_MS=5000,BLEED_MS=15000;
+let lastLifeTick=0;
+function resetDownedState(p){p.isDowned=false;p.downedUntil=0;p.reviveHeld=false;p.reviveProgress=0;p._lifeLockUntil=0;p._downedBy=null;p._downedHits=[];}
+function livingCombatants(){return [...roomHumans(),...aiBots].filter(p=>p.hp>0&&!p.isDead&&!isAssignedSpectator(p.id));}
+function canRevive(actor,target){return selectedMode==='br'&&actor&&target&&actor.id!==target.id&&actor.hp>0&&!actor.isDead&&!actor.isDowned&&!isAssignedSpectator(actor.id)&&target.isDowned&&!target.isDead&&areAllies(actor,target)&&Math.hypot(actor.x-target.x,actor.y-target.y)<=REVIVE_RANGE&&hasLineOfSight(actor,target);}
+function nearestDownedAlly(actor){return livingCombatants().filter(p=>canRevive(actor,p)).sort((a,b)=>Math.hypot(actor.x-a.x,actor.y-a.y)-Math.hypot(actor.x-b.x,actor.y-b.y))[0]||null;}
+function publishLife(p){broadcastData({type:'LIFE_STATE',player:{id:p.id,hp:p.hp,isDead:!!p.isDead,isDowned:!!p.isDowned,downedUntil:p.downedUntil||0,deaths:p.deaths||0}});}
+function applyLocalLife(state){
+    const wasDead=myPlayer.isDead;
+    for(const key of ['hp','isDead','isDowned','downedUntil','deaths'])if(state[key]!==undefined)myPlayer[key]=state[key];
+    if(myPlayer.isDowned){myPlayer.isShooting=false;myPlayer.isAiming=false;myPlayer.isMoving=false;myPlayer.reviveHeld=false;}
+    if(myPlayer.isDead&&!wasDead)startSpectating();
+}
+function finishBattleElimination(p,killer){
+    if(p.isDead)return;
+    p.isDowned=false;p.reviveHeld=false;p.hp=0;
+    if(p===myPlayer)handleMyDeath(killer);
+    else {p.isDead=true;p.deaths=(p.deaths||0)+1;if(killer)addKill(killer);}
+    if(isBotEntity(p)&&p.weapon){const item={id:'item_'+Math.random().toString(36).slice(2),x:p.x,y:p.y,type:p.weapon};droppedItems.push(item);broadcastData({type:'DROP_ITEM',item});}
+    publishLife(p);updateHUD();
+}
+function applyBattleDamage(p,damage,killer,shotId){
+    if(!isHost||p.isDead||isAssignedSpectator(p.id)||!(damage>0))return;
+    if(p.isDowned){
+        // 한 발의 산탄 여러 개는 시간을 한 번만 줄인다.
+        if(!shotId)return;
+        if(!Array.isArray(p._downedHits))p._downedHits=[];
+        if(p._downedHits.includes(shotId))return;
+        p._downedHits.push(shotId);
+        p.downedUntil-=500;
+        if(Date.now()>=p.downedUntil)finishBattleElimination(p,killer||p._downedBy);
+        else publishLife(p);
+        return;
+    }
+    p.reviveHeld=false;p.hp-=damage;
+    if(p.hp<=0){
+        const helper=livingCombatants().some(a=>a.id!==p.id&&!a.isDowned&&areAllies(a,p));
+        if(!p.isDowned&&helper){
+            p.hp=1;p.isDowned=true;p.downedUntil=Date.now()+BLEED_MS;p._downedBy=killer;p._downedHits=shotId?[shotId]:[];
+            p.isShooting=false;p.isAiming=false;p.isMoving=false;p.movementMode='walk';
+        }else {finishBattleElimination(p,killer||p._downedBy);return;}
+    }
+    p._lifeLockUntil=Date.now()+1500;publishLife(p);
+}
+function updateRevives(){
+    const now=Date.now();
+    if(!isHost||selectedMode!=='br'||isSpawnSelecting){lastLifeTick=now;return;}
+    const dt=Math.min(.1,Math.max(0,(now-(lastLifeTick||now))/1000));lastLifeTick=now;
+    for(const p of roomHumans())if(p.hp>0&&!p.isDead&&!p.isDowned&&!isAssignedSpectator(p.id)&&Math.hypot(p.x-zone.x,p.y-zone.y)>zone.radius)applyBattleDamage(p,9*zoneStage*dt,null);
+    for(const p of livingCombatants())if(p.isDowned){
+        const helper=livingCombatants().some(a=>a.id!==p.id&&!a.isDowned&&areAllies(a,p));
+        if(now>=p.downedUntil||!helper)finishBattleElimination(p,p._downedBy);
+    }
+    const claimed=new Set(),active=new Set();
+    for(const actor of roomHumans()){
+        actor.reviveProgress=0;
+        const fresh=actor===myPlayer||now-(actor._inputAt||0)<700;
+        const target=actor.reviveHeld&&fresh?nearestDownedAlly(actor):null;
+        if(!target||claimed.has(target.id)){reviveSessions.delete(actor.id);continue;}
+        claimed.add(target.id);active.add(actor.id);actor.isShooting=false;
+        let session=reviveSessions.get(actor.id);
+        if(!session||session.targetId!==target.id){session={targetId:target.id,started:now};reviveSessions.set(actor.id,session);}
+        actor.reviveProgress=Math.min(1,(now-session.started)/REVIVE_MS);
+        if(actor.reviveProgress>=1){resetDownedState(target);target.hp=Math.min(target.maxHp||200,80);target._lifeLockUntil=now+1500;publishLife(target);actor.reviveHeld=false;reviveSessions.delete(actor.id);}
+    }
+    for(const id of reviveSessions.keys())if(!active.has(id))reviveSessions.delete(id);
+}
+function updateReviveHUD(){
+    const el=document.getElementById('reviveHUD');
+    if(!gameStarted||gameEnded||isSpectating){el.style.display='none';return;}
+    let text='';
+    if(myPlayer.isDowned)text='기절 · 팀원의 소생을 기다리세요 ('+Math.max(0,Math.ceil((myPlayer.downedUntil-Date.now())/1000))+'초)';
+    else if(myPlayer.reviveHeld)text='소생 중 · F / 소생 버튼을 계속 누르세요';
+    else if(nearestDownedAlly(myPlayer))text='가까운 팀원 기절 · F / 소생 버튼 5초 누르기';
+    el.textContent=text;el.style.display=text?'block':'none';
+}
+
+function update() {
+    refreshSpectatorControls();
+    if(!gameStarted || gameEnded) return;
+    enforceObserver(myPlayer);
+    updateRevives();updateReviveHUD();
+
+    // 배틀로얄 무작위 위치 단계별 축소 진행
+    if(selectedMode === 'br' && isHost && !isSpawnSelecting) {
+        if(isZoneShrinking) {
+            const dx = targetZone.x - zone.x;
+            const dy = targetZone.y - zone.y;
+            const dist = Math.hypot(dx, dy);
+
+            if(zone.radius > targetZone.radius) {
+                zone.radius -= zone.shrinkRate;
+                if(dist > 2) {
+                    zone.x += (dx / dist) * zone.shrinkRate * 0.5;
+                    zone.y += (dy / dist) * zone.shrinkRate * 0.5;
+                }
+            } else {
+                isZoneShrinking = false;
+                zoneStage++;
+                zoneTimer = Math.max(20, 60 - zoneStage * 8);
+                setupNextZoneTarget();
+                updateHUD();
+            }
+        }
+    }
+
+    let currentSpeed = 3.0;
+
+    if (keys['shift'] || (isMobile && mobileSprintHeld)) {
+        currentSpeed = 5.0;
+        myPlayer.movementMode = 'sprint';
+    } else if (keys['control']) {
+        currentSpeed = 1.5;
+        myPlayer.movementMode = 'stealth';
+    } else {
+        currentSpeed = 3.0;
+        myPlayer.movementMode = 'walk';
+    }
+
+    let dx = 0, dy = 0;
+    if (!isMobile) {
+        if (keys['w']) dy -= 1;
+        if (keys['s']) dy += 1;
+        if (keys['a']) dx -= 1;
+        if (keys['d']) dx += 1;
+        let len = Math.hypot(dx, dy);
+        if (len > 0) { dx /= len; dy /= len; }
+    } else {
+        dx = mobileMoveVec.x;
+        dy = mobileMoveVec.y;
+    }
+
+    if(myPlayer.isDowned||myPlayer.reviveHeld){dx=0;dy=0;myPlayer.isShooting=false;myPlayer.isAiming=false;}
+    myPlayer.isMoving = (dx !== 0 || dy !== 0);
+
+    if (myPlayer.hp > 0 && !myPlayer.isDead && !isSpectating && !isRespawning && !isSpawnSelecting) {
+        let nextX = Math.max(50, Math.min(WORLD_SIZE - 50, myPlayer.x + dx * currentSpeed));
+        let nextY = Math.max(50, Math.min(WORLD_SIZE - 50, myPlayer.y + dy * currentSpeed));
+
+        if(!checkObstacleCollision(nextX, myPlayer.y, 15)) myPlayer.x = nextX;
+        if(!checkObstacleCollision(myPlayer.x, nextY, 15)) myPlayer.y = nextY;
+
+        if (myPlayer.isShooting) {
+            const now = Date.now();
+            if (myPlayer.weapon && now - myPlayer.lastShootTime >= WEAPONS[myPlayer.weapon].cooldown) {
+                shoot(myPlayer);
+                myPlayer.lastShootTime = now;
+            }
+        }
+    }
+
+    updateAI();
+    updateGuestPlayerInterpolation();
+    updateGuestBotInterpolation();
+    updateFootsteps();
+    updateNetwork();
+
+    for (let i = bloodParticles.length - 1; i >= 0; i--) {
+        const p = bloodParticles[i];
+        p.x += p.vx; p.y += p.vy;
+        p.alpha -= 0.03;
+        if (p.alpha <= 0) bloodParticles.splice(i, 1);
+    }
+
+    const screenCenterX = canvas.width / 2;
+    const screenCenterY = canvas.height / 2;
+
+    if (isSpectating || isRespawning) {
+        if(spectateTarget)spectateTarget=spectateCandidates().find(p=>p.id===spectateTarget.id)||null;
+        if (!spectateTarget || spectateTarget.hp <= 0 || spectateTarget.isDead) {
+            findNextSpectateTarget();
+        }
+        if (spectateTarget) {
+            camera.x += (spectateTarget.x - camera.x) * 0.1;
+            camera.y += (spectateTarget.y - camera.y) * 0.1;
+        }
+    } else {
+        let targetCamX = myPlayer.x;
+        let targetCamY = myPlayer.y;
+
+        if (myPlayer.isAiming && myPlayer.hp > 0 && !myPlayer.isDead) {
+            const sc = (myPlayer.weapon && myPlayer.equippedScope) ? SCOPES[myPlayer.equippedScope] : { viewOffset: 200 };
+            let mouseOffsetX = mouse.x - screenCenterX;
+            let mouseOffsetY = mouse.y - screenCenterY;
+
+            if (isMobile) {
+                mouseOffsetX = mobileAimVec.x * sc.viewOffset;
+                mouseOffsetY = mobileAimVec.y * sc.viewOffset;
+            }
+
+            const dist = Math.hypot(mouseOffsetX, mouseOffsetY);
+
+            if (dist > 0) {
+                const aimFraction=isMobile?Math.min(1,dist/sc.viewOffset):Math.min(1,dist/Math.max(1,Math.min(canvas.width,canvas.height)*.45));
+                const actualOffset=aimFraction*sc.viewOffset;
+                targetCamX += (mouseOffsetX / (dist || 1)) * actualOffset;
+                targetCamY += (mouseOffsetY / (dist || 1)) * actualOffset;
+            }
+        }
+
+        camera.x += (targetCamX - camera.x) * 0.1;
+        camera.y += (targetCamY - camera.y) * 0.1;
+
+        if (myPlayer.hp > 0 && !myPlayer.isDead) {
+            if (!isMobile) {
+                myPlayer.angle = Math.atan2((camera.y + (mouse.y - screenCenterY)) - myPlayer.y, (camera.x + (mouse.x - screenCenterX)) - myPlayer.x);
+            } else if (mobileAimVec.x !== 0 || mobileAimVec.y !== 0) {
+                myPlayer.angle = Math.atan2(mobileAimVec.y, mobileAimVec.x);
+            } else if (dx !== 0 || dy !== 0) {
+                myPlayer.angle = Math.atan2(dy, dx);
+            }
+        }
+    }
+
+    const now = Date.now();
+    updateGlassShards();
+    for(let i = gunshotEvents.length - 1; i >= 0; i--) {
+        const duration = 800;
+        if(now - gunshotEvents[i].time > duration) gunshotEvents.splice(i, 1);
+    }
+
+    // 총알 충돌 판정 및 갑바 대미지 경감 적용
+    if(isHost) {
+        for(let i = bullets.length - 1; i >= 0; i--) {
+            const b = bullets[i];
+            b.prevX = b.x;
+            b.prevY = b.y;
+            b.x += b.dx;
+            b.y += b.dy;
+
+            // 한 프레임 안에서 벽과 적을 모두 지나면 먼저 닿은 대상만 처리한다.
+            const impact=firstBulletImpact(b);
+            if(Number.isFinite(impact.t)){
+                b.x=b.prevX+(b.x-b.prevX)*impact.t;
+                b.y=b.prevY+(b.y-b.prevY)*impact.t;
+            }
+            detectAndBreakWindowOnBullet(b);
+            if(impact.wall) {
+                if(impact.door)damageHouseDoor(impact.door,b.shotId);
+                bullets.splice(i, 1);
+                continue;
+            }
+
+            let hit = false;
+
+            for (let bIdx = aiBots.length - 1; bIdx >= 0; bIdx--) {
+                const bot = aiBots[bIdx];
+                if (b.ownerId !== bot.id && !bot.isDead && bot.hp > 0 && botBulletCanDamage(b.ownerId, bot)) {
+                    const distSq = distToSegmentSquared({x: bot.x, y: bot.y}, {x: b.prevX, y: b.prevY}, {x: b.x, y: b.y});
+                    if (impact.target === bot) {
+                        let finalDmg = b.damage;
+                        if(bot.equippedBodyArmor && ARMORS[bot.equippedBodyArmor]) {
+                            finalDmg *= (1 - ARMORS[bot.equippedBodyArmor].reduction);
+                        }
+                        if(selectedMode==='br'){applyBattleDamage(bot,finalDmg,b.ownerId,b.shotId);spawnBloodParticles(bot.x,bot.y);hit=true;break;}
+                        bot.hp -= finalDmg;
+                        spawnBloodParticles(bot.x, bot.y);
+                        hit = true;
+                        if (bot.hp <= 0) {
+                            bot.hp = 0;
+                            bot.isDead = true;
+                            bot.deaths++;
+                            addKill(b.ownerId);
+
+                            if(selectedMode === 'normal') {
+                                giveDeathmatchKillAmmoById(b.ownerId);
+                            }
+
+                            if (selectedMode === 'br' && bot.weapon) {
+                                const dropWeaponItem = {
+                                    id: 'item_' + Math.random().toString(36).substring(2, 9),
+                                    x: bot.x, y: bot.y, type: bot.weapon
+                                };
+                                droppedItems.push(dropWeaponItem);
+                                broadcastData({ type: 'DROP_ITEM', item: dropWeaponItem });
+                            }
+
+                            if (selectedMode === 'br') {
+                                aiBots.splice(bIdx, 1);
+                            } else {
+                                respawnBot(bot);
+                            }
+                            updateHUD();
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (!hit) {
+                const allHumanPlayers = [myPlayer, ...Object.values(remotePlayers)];
+                for(let targetP of allHumanPlayers) {
+                    if(b.ownerId !== targetP.id && targetP.hp > 0 && !targetP.isDead && botBulletCanDamage(b.ownerId, targetP)) {
+                        const distSq = distToSegmentSquared({x: targetP.x, y: targetP.y}, {x: b.prevX, y: b.prevY}, {x: b.x, y: b.y});
+                        if (impact.target === targetP) {
+                            let finalDmg = b.damage;
+                            if(targetP.equippedBodyArmor && ARMORS[targetP.equippedBodyArmor]) {
+                                finalDmg *= (1 - ARMORS[targetP.equippedBodyArmor].reduction);
+                            }
+                            if(selectedMode==='br'){applyBattleDamage(targetP,finalDmg,b.ownerId,b.shotId);spawnBloodParticles(targetP.x,targetP.y);hit=true;break;}
+                            targetP.hp -= finalDmg;
+                            spawnBloodParticles(targetP.x, targetP.y);
+                            hit = true;
+
+                            if(targetP.id === myPlayer.id) {
+                                triggerDamageEffect();
+                                if(myPlayer.hp <= 0 && !myPlayer.isDead) {
+                                    handleMyDeath(b.ownerId);
+                                }
+                            } else {
+                                if (targetP.hp <= 0 && !targetP.isDead) {
+                                    targetP.hp = 0;
+                                    targetP.isDead = true;
+                                    targetP.deaths = (targetP.deaths || 0) + 1;
+                                    addKill(b.ownerId);
+
+                                    if(selectedMode === 'normal') {
+                                        giveDeathmatchKillAmmoById(b.ownerId);
+                                    }
+
+                                    if (selectedMode === 'normal') {
+                                        let connectedPeerId = null;
+                                        for(let pKey in connections) {
+                                            if(connections[pKey].playerId === targetP.id) {
+                                                connectedPeerId = pKey;
+                                                break;
+                                            }
+                                        }
+                                        respawnRemotePlayer(targetP, connectedPeerId);
+                                    }
+                                }
+                                broadcastData({ type: 'DAMAGE', targetId: targetP.id, newHp: targetP.hp, attackerId: b.ownerId });
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (hit) {
+                bullets.splice(i, 1);
+                continue;
+            }
+
+            if(b.x < 0 || b.x > WORLD_SIZE || b.y < 0 || b.y > WORLD_SIZE) bullets.splice(i, 1);
+        }
+    }
+}
+
+function giveDeathmatchKillAmmoById(killerId) {
+    if(killerId === myPlayer.id) {
+        giveDeathmatchKillAmmo(myPlayer);
+    } else if(remotePlayers[killerId]) {
+        giveDeathmatchKillAmmo(remotePlayers[killerId]);
+    } else {
+        const bot = aiBots.find(b => b.id === killerId);
+        if(bot) giveDeathmatchKillAmmo(bot);
+    }
+}
+
+function getIntersection(ray, segment) {
+    const r_px = ray.a.x, r_py = ray.a.y;
+    const r_dx = ray.b.x - ray.a.x, r_dy = ray.b.y - ray.a.y;
+
+    const s_px = segment.a.x, s_py = segment.a.y;
+    const s_dx = segment.b.x - segment.a.x, s_dy = segment.b.y - segment.a.y;
+
+    // 아래 외적 검사로 길이 0/평행도 판정하므로 반복 제곱근 계산이 필요 없다.
+
+    const div = (s_dx * r_dy - s_dy * r_dx);
+    if (Math.abs(div) < 0.0001) return null;
+
+    const T2 = (r_dx * (s_py - r_py) + r_dy * (r_px - s_px)) / div;
+    const T1 = (Math.abs(r_dx) > 0.0001) ? (s_px + s_dx * T2 - r_px) / r_dx : (s_py + s_dy * T2 - r_py) / r_dy;
+
+    if (T1 < 0 || T2 < 0 || T2 > 1) return null;
+
+    return { x: r_px + r_dx * T1, y: r_py + r_dy * T1, param: T1 };
+}
+
+const maskCanvas = document.createElement('canvas');
+const mCtxMask = maskCanvas.getContext('2d');
+let lastFogBuildAt = 0;
+let lastFogCameraX = 0, lastFogCameraY = 0;
+const FOG_BUILD_INTERVAL = 52;
+const MAX_FOG_RECTS = 72;
+const prevFogCanvas = document.createElement('canvas');
+const prevFogCtx = prevFogCanvas.getContext('2d');
+let prevFogCameraX = 0, prevFogCameraY = 0, fogBlendStartedAt = 0;
+const FOG_BLEND_MS = 95;
+
+
+
+
+function drawFogOfWar() {
+    if (!gameStarted || !myPlayer || isSpectating || isRespawning || myPlayer.isDead) return;
+    if (!Array.isArray(obstacles) || !obstacles.length) return;
+    if (!camera || !Number.isFinite(camera.x) || !Number.isFinite(camera.y)) return;
+
+    const nowFog = performance.now();
+
+    // 원본 방식은 유지하되 큰 맵에서 시작 직후 멈추지 않도록 약간만 캐시한다.
+    const fogInterval = isHost ? 24 : 50; // 게스트는 무거운 시야 계산만 20Hz, 캐시 이동은 매 프레임
+    if (
+        maskCanvas.width === canvas.width &&
+        maskCanvas.height === canvas.height &&
+        drawFogOfWar._lastBuild &&
+        nowFog - drawFogOfWar._lastBuild < fogInterval
+    ) {
+        const dx = (drawFogOfWar._buildCameraX ?? camera.x) - camera.x;
+        const dy = (drawFogOfWar._buildCameraY ?? camera.y) - camera.y;
+        ctx.save();
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.drawImage(maskCanvas, dx, dy);
+        ctx.restore();
+        return;
+    }
+    drawFogOfWar._lastBuild = nowFog;
+    drawFogOfWar._buildCameraX = camera.x;
+    drawFogOfWar._buildCameraY = camera.y;
+    drawFogOfWar._buildPlayerX = myPlayer.x;
+    drawFogOfWar._buildPlayerY = myPlayer.y;
+
+    const px = myPlayer.x;
+    const py = myPlayer.y;
+
+    // 가장 처음 파일과 동일한 넓은 시야 여유 영역
+    const viewMargin = 1200;
+    const screenLeft = camera.x - canvas.width / 2 - viewMargin;
+    const screenRight = camera.x + canvas.width / 2 + viewMargin;
+    const screenTop = camera.y - canvas.height / 2 - viewMargin;
+    const screenBottom = camera.y + canvas.height / 2 + viewMargin;
+
+    const segments = [
+        { a: { x: screenLeft, y: screenTop }, b: { x: screenRight, y: screenTop } },
+        { a: { x: screenRight, y: screenTop }, b: { x: screenRight, y: screenBottom } },
+        { a: { x: screenRight, y: screenBottom }, b: { x: screenLeft, y: screenBottom } },
+        { a: { x: screenLeft, y: screenBottom }, b: { x: screenLeft, y: screenTop } }
+    ];
+
+    const angles = [];
+    let rectCount = 0;
+    const maxRects = 72;
+
+    for (const obs of obstacles) {
+        if (rectCount >= maxRects) break;
+        if (!obs || !Number.isFinite(obs.x) || !Number.isFinite(obs.y) ||
+            !Number.isFinite(obs.w) || !Number.isFinite(obs.h)) continue;
+
+        if (obs.x + obs.w < screenLeft || obs.x > screenRight ||
+            obs.y + obs.h < screenTop || obs.y > screenBottom) continue;
+
+        let rects;
+
+        // 현재 집의 문/창문은 그대로 보이도록 실제 탄도 벽 조각을 사용한다.
+        if (obs.type === 'house' && typeof getHouseBallisticWallRects === 'function') {
+            try {
+                rects = getHouseBallisticWallRects(obs);
+            } catch (e) {
+                rects = [obs];
+            }
+        } else {
+            const pad = obs.type === 'tree' && typeof TREE_HITBOX_PADDING === 'number'
+                ? TREE_HITBOX_PADDING : 0;
+            rects = [{
+                x: obs.x - pad,
+                y: obs.y - pad,
+                w: obs.w + pad * 2,
+                h: obs.h + pad * 2
+            }];
+        }
+
+        if (!Array.isArray(rects)) rects = [obs];
+
+        for (const r of rects) {
+            if (rectCount >= maxRects) break;
+            if (!r || r.w <= 0 || r.h <= 0) continue;
+
+            const corners = [
+                { x: r.x, y: r.y },
+                { x: r.x + r.w, y: r.y },
+                { x: r.x + r.w, y: r.y + r.h },
+                { x: r.x, y: r.y + r.h }
+            ];
+
+            for (let i = 0; i < 4; i++) {
+                segments.push({ a: corners[i], b: corners[(i + 1) % 4] });
+            }
+
+            for (const c of corners) {
+                const angle = Math.atan2(c.y - py, c.x - px);
+                angles.push(angle - 0.0001, angle, angle + 0.0001);
+            }
+
+            rectCount++;
+        }
+    }
+
+    angles.push(
+        Math.atan2(screenTop - py, screenLeft - px),
+        Math.atan2(screenTop - py, screenRight - px),
+        Math.atan2(screenBottom - py, screenRight - px),
+        Math.atan2(screenBottom - py, screenLeft - px)
+    );
+
+    angles.sort((a, b) => a - b);
+
+    const maxRayDistance =
+        Math.hypot(camera.x - px, camera.y - py) +
+        Math.max(canvas.width, canvas.height) + 1000;
+
+    const intersects = [];
+
+    for (const angle of angles) {
+        const ray = {
+            a: { x: px, y: py },
+            b: {
+                x: px + Math.cos(angle) * maxRayDistance,
+                y: py + Math.sin(angle) * maxRayDistance
+            }
+        };
+
+        let closest = null;
+
+        for (const seg of segments) {
+            const intersect = getIntersection(ray, seg);
+            if (!intersect) continue;
+            if (!closest || intersect.param < closest.param) {
+                closest = intersect;
+            }
+        }
+
+        if (closest) intersects.push(closest);
+    }
+
+    if(maskCanvas.width!==canvas.width)maskCanvas.width=canvas.width;
+    if(maskCanvas.height!==canvas.height)maskCanvas.height=canvas.height;
+
+    // 기존 사용자 요청대로 그림자 농도 30% 유지
+    mCtxMask.globalCompositeOperation = 'source-over';
+    mCtxMask.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+    mCtxMask.fillStyle = 'rgba(0,0,0,0.30)';
+    mCtxMask.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+
+    // 플레이어에게 실제로 보이는 영역만 그림자에서 제거
+    mCtxMask.globalCompositeOperation = 'destination-out';
+    mCtxMask.save();
+    mCtxMask.translate(canvas.width / 2 - camera.x, canvas.height / 2 - camera.y);
+
+    if (intersects.length > 0) {
+        mCtxMask.beginPath();
+        mCtxMask.moveTo(intersects[0].x, intersects[0].y);
+        for (let i = 1; i < intersects.length; i++) {
+            mCtxMask.lineTo(intersects[i].x, intersects[i].y);
+        }
+        mCtxMask.closePath();
+        mCtxMask.fill();
+    }
+
+    mCtxMask.restore();
+    mCtxMask.globalCompositeOperation = 'source-over';
+
+    ctx.save();
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.drawImage(maskCanvas, 0, 0);
+    ctx.restore();
+}
+
+function drawPlayer(p) {
+    if (p !== myPlayer && !shouldRenderCombatEntityToLocal(p)) return;
+    if (p.isDead || p.hp <= 0) return;
+    const now = performance.now();
+    if(p.isDowned){
+        ctx.save();ctx.fillStyle='#ffb04a';ctx.beginPath();ctx.ellipse(p.x,p.y,22,10,0,0,Math.PI*2);ctx.fill();ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.fillText(p.name+' · 기절',p.x,p.y-22);ctx.restore();return;
+    }
+    const moving = !!p.isMoving || p.movementMode === 'sprint';
+    const sprint = p.movementMode === 'sprint';
+    const gait = moving ? Math.sin(now * (sprint ? 0.018 : 0.011) + (p.x+p.y)*0.01) : 0;
+    const bob = moving ? Math.abs(Math.sin(now * (sprint ? 0.018 : 0.011))) * (sprint ? 3 : 1.5) : 0;
+    let reloadT = 0;
+    if (p.isReloading) reloadT = ((Date.now() - (p.reloadStartedAt || Date.now())) % 1500) / 1500;
+
+    // soft ground shadow made only from shapes
+    ctx.save(); ctx.translate(p.x-5, p.y+15); ctx.rotate(p.angle);
+    ctx.fillStyle='rgba(0,0,0,.28)'; ctx.beginPath(); ctx.ellipse(0,0,25,11,0,0,Math.PI*2); ctx.fill(); ctx.restore();
+
+    ctx.save();
+    ctx.translate(p.x, p.y - bob);
+    ctx.rotate(p.angle);
+
+    // 봇의 하체는 이동 방향, 상체와 총은 조준 방향을 따른다.
+    ctx.save();
+    if(isBotEntity(p) && moving && Number.isFinite(p.moveAngle))ctx.rotate(p.moveAngle-p.angle);
+    // legs/boots: run animation
+    ctx.fillStyle = '#20252a';
+    ctx.save(); ctx.translate(-9, -9 + gait*6); ctx.rotate(gait*.28); ctx.fillRect(-9,-5,18,9); ctx.restore();
+    ctx.save(); ctx.translate(-9, 9 - gait*6); ctx.rotate(-gait*.28); ctx.fillRect(-9,-4,18,9); ctx.restore();
+
+    ctx.restore();
+    // torso + vest panels
+    ctx.fillStyle = '#d8aa32'; ctx.beginPath(); ctx.arc(0,0,19,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#9b7621'; ctx.fillRect(-12,-13,18,26);
+    ctx.fillStyle='#5d4b22'; ctx.fillRect(-9,-9,5,7); ctx.fillRect(-9,2,5,7);
+    if(p.equippedBodyArmor) {
+        const c=p.equippedBodyArmor.includes('3')?'#9d3333':(p.equippedBodyArmor.includes('2')?'#2d8178':'#7e8790');
+        ctx.fillStyle=c; ctx.fillRect(-12,-12,17,24); ctx.fillStyle='rgba(255,255,255,.18)'; ctx.fillRect(-9,-9,11,5);
+    }
+
+    // head + helmet shapes
+    ctx.fillStyle='#d8aa32'; ctx.beginPath(); ctx.arc(7,0,11,0,Math.PI*2); ctx.fill();
+    if(p.equippedHelmet){ const hc=p.equippedHelmet.includes('3')?'#8d3030':(p.equippedHelmet.includes('2')?'#34766e':'#707780'); ctx.fillStyle=hc; ctx.beginPath(); ctx.arc(7,0,12,Math.PI*.65,Math.PI*1.35); ctx.lineTo(12,0); ctx.fill(); }
+
+    // arms; reload hand moves toward magazine
+    const handShift = p.isReloading ? Math.sin(reloadT*Math.PI)*12 : 0;
+    ctx.fillStyle='#d8aa32';
+    ctx.beginPath(); ctx.arc(8,-13 + gait*2,5,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(5 + handShift,13 - gait*2,5,0,Math.PI*2); ctx.fill();
+
+    // gun built from rectangles/circles; reload animation tilts it and moves magazine
+    if(p.weapon){
+        ctx.save();
+        if(p.isReloading) ctx.rotate(-0.32*Math.sin(reloadT*Math.PI));
+        const gunLen=p.weapon==='sniper'?43:(p.weapon==='shotgun'?34:37);
+        ctx.fillStyle='#252a2e'; ctx.fillRect(10,-4,gunLen,8);
+        ctx.fillStyle='#4b5359'; ctx.fillRect(17,-6,15,3);
+        ctx.fillStyle='#171a1c'; ctx.fillRect(20,4,8,10);
+        if(p.weapon==='sniper'){ctx.fillStyle='#1a1d20';ctx.fillRect(18,-9,19,4);ctx.beginPath();ctx.arc(24,-7,4,0,Math.PI*2);ctx.fill();}
+        if(p.weapon==='shotgun'){ctx.fillStyle='#6e4c2c';ctx.fillRect(25,-5,14,10);}
+        if(p.isReloading){
+            const magY=8 + Math.sin(reloadT*Math.PI)*15;
+            ctx.fillStyle='#151719'; ctx.fillRect(20,magY,8,12);
+        }
+        ctx.restore();
+    } else { ctx.fillStyle='#333'; ctx.fillRect(10,-3,18,6); }
+    ctx.restore();
+
+    ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(p.x-25,p.y-39,50,6);
+    ctx.fillStyle=p.hp>50?'#00ffcc':'#ff4444'; ctx.fillRect(p.x-25,p.y-39,(p.hp/p.maxHp)*50,6);
+    ctx.fillStyle=getNameColor(p); ctx.font='bold 12px sans-serif'; ctx.textAlign='center'; ctx.fillText(p.name,p.x,p.y-46);
+}
+
+function drawDesignedItem(item){
+    const x=item.x,y=item.y,t=item.type;
+    ctx.save(); ctx.translate(x,y); ctx.lineWidth=2; ctx.strokeStyle='rgba(255,255,255,.55)';
+    ctx.fillStyle='rgba(0,0,0,.25)'; ctx.beginPath();ctx.ellipse(2,7,13,6,0,0,Math.PI*2);ctx.fill();
+    if(WEAPONS[t]){
+        ctx.rotate(-.25); ctx.fillStyle='#30363b';
+        const len=t==='sniper'?31:(t==='shotgun'?27:25); ctx.fillRect(-14,-4,len,8); ctx.fillStyle='#171a1c';ctx.fillRect(-3,4,7,9);
+        if(t==='sniper'){ctx.fillRect(-5,-8,15,3);ctx.beginPath();ctx.arc(0,-7,4,0,Math.PI*2);ctx.fill();}
+        if(t==='shotgun'){ctx.fillStyle='#775234';ctx.fillRect(2,-5,10,10);}
+    } else if(t.startsWith('ammo_')){
+        ctx.fillStyle='#c9a93c'; for(let i=-1;i<=1;i++){ctx.fillRect(i*5-2,-7,4,13);ctx.beginPath();ctx.arc(i*5,-7,2,Math.PI,0);ctx.fill();}
+    } else if(t.startsWith('helmet_')){
+        ctx.fillStyle='#71808a';ctx.beginPath();ctx.arc(0,2,10,Math.PI,Math.PI*2);ctx.lineTo(10,7);ctx.lineTo(-10,7);ctx.closePath();ctx.fill();ctx.stroke();
+    } else if(t.startsWith('body_')){
+        ctx.fillStyle='#52646d';ctx.beginPath();ctx.moveTo(-10,-9);ctx.lineTo(-4,-12);ctx.lineTo(0,-7);ctx.lineTo(4,-12);ctx.lineTo(10,-9);ctx.lineTo(8,11);ctx.lineTo(-8,11);ctx.closePath();ctx.fill();ctx.stroke();ctx.fillStyle='#2e3b41';ctx.fillRect(-5,-3,10,6);
+    } else if(/^\d+x$/.test(t)){
+        ctx.fillStyle='#20262b';ctx.fillRect(-12,-4,24,8);ctx.beginPath();ctx.arc(-7,0,7,0,Math.PI*2);ctx.arc(7,0,7,0,Math.PI*2);ctx.fill();ctx.fillStyle='#75b8c8';ctx.beginPath();ctx.arc(-7,0,4,0,Math.PI*2);ctx.arc(7,0,4,0,Math.PI*2);ctx.fill();
+    } else {
+        // healing/other supplies: compact medical crate
+        ctx.fillStyle='#315f48';ctx.fillRect(-10,-9,20,18);ctx.strokeRect(-10,-9,20,18);ctx.fillStyle='#e8e8df';ctx.fillRect(-2,-6,4,12);ctx.fillRect(-6,-2,12,4);
+    }
+    ctx.restore();
+}
+
+
+function drawTreeObstacle(obs){
+    const style=obs.style||0;
+    const cx=obs.x+obs.w/2, cy=obs.y+obs.h/2;
+    // 겹친 타원으로 가장자리가 딱 끊기지 않는 부드러운 나무 그림자
+    [['rgba(0,0,0,.055)',.98,.68],['rgba(0,0,0,.07)',.87,.59],['rgba(0,0,0,.085)',.76,.50]].forEach(([c,rx,ry])=>{
+        ctx.fillStyle=c; ctx.beginPath(); ctx.ellipse(cx+7,cy+10,obs.w*rx,obs.h*ry,0,0,Math.PI*2); ctx.fill();
+    });
+    ctx.fillStyle='#6b4a2e';ctx.fillRect(cx-4,cy-1,8,obs.h*.62);
+    ctx.strokeStyle='#51351f';ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(cx,cy+5);ctx.lineTo(cx-10,cy-8);ctx.moveTo(cx,cy+2);ctx.lineTo(cx+10,cy-10);ctx.stroke();
+    const greens=['#355f37','#2f6d3a','#477a42'];
+    ctx.fillStyle=greens[style%greens.length];
+    [[0,-8,.72],[-11,-2,.60],[12,-1,.62],[0,7,.56]].forEach(([ox,oy,m])=>{ctx.beginPath();ctx.arc(cx+ox,cy+oy,obs.w*m,0,Math.PI*2);ctx.fill();});
+}
+
+function drawHouseBase(obs){
+    const st=obs.style||0, t=obs.wallThickness||20;
+    const floors=['#746957','#69706a','#71645f','#6b6558','#6d626f','#726c60'];
+    const walls=['#b3a080','#8fa197','#a08b80','#968da5','#aaa17b','#9c8e75'];
+    ctx.save();
+
+    // 실내 바닥
+    ctx.fillStyle=floors[st%floors.length];
+    ctx.fillRect(obs.x+t,obs.y+t,obs.w-t*2,obs.h-t*2);
+
+    // 바닥 타일/마루 패턴
+    ctx.strokeStyle='rgba(255,255,255,.055)'; ctx.lineWidth=2;
+    const step=42;
+    for(let xx=obs.x+t;xx<obs.x+obs.w-t;xx+=step){ctx.beginPath();ctx.moveTo(xx,obs.y+t);ctx.lineTo(xx,obs.y+obs.h-t);ctx.stroke();}
+    for(let yy=obs.y+t;yy<obs.y+obs.h-t;yy+=step){ctx.beginPath();ctx.moveTo(obs.x+t,yy);ctx.lineTo(obs.x+obs.w-t,yy);ctx.stroke();}
+
+    // 외벽: 문 부분은 실제로 비어 있다.
+    ctx.fillStyle=walls[st%walls.length];
+    getHouseWallRects(obs).forEach(r=>ctx.fillRect(r.x,r.y,r.w,r.h));
+
+    // 문턱
+    const dw=obs.doorWidth||64, dp=obs.doorPos||.5;
+    ctx.fillStyle='#5b412d';
+    if(obs.doorSide==='bottom'||obs.doorSide==='top'){
+        const dx=obs.x+obs.w*dp-dw/2, yy=obs.doorSide==='bottom'?obs.y+obs.h-5:obs.y;
+        ctx.fillRect(dx,yy,dw,5);
+    } else {
+        const dy=obs.y+obs.h*dp-dw/2, xx=obs.doorSide==='right'?obs.x+obs.w-5:obs.x;
+        ctx.fillRect(xx,dy,5,dw);
+    }
+
+    // 집마다 다른 내부 가구/방 구획
+    ctx.fillStyle='rgba(52,38,28,.72)';
+    if((obs.roomStyle||0)%4===0){
+        ctx.fillRect(obs.x+t+28,obs.y+t+28,76,36);
+        ctx.fillRect(obs.x+obs.w-t-110,obs.y+obs.h-t-55,82,28);
+    } else if((obs.roomStyle||0)%4===1){
+        ctx.fillRect(obs.x+t+25,obs.y+obs.h/2-18,105,36);
+        ctx.fillRect(obs.x+obs.w-t-62,obs.y+t+32,34,88);
+    } else if((obs.roomStyle||0)%4===2){
+        ctx.beginPath();ctx.arc(obs.x+obs.w*.33,obs.y+obs.h*.45,32,0,Math.PI*2);ctx.fill();
+        ctx.fillRect(obs.x+obs.w*.65,obs.y+obs.h*.60,95,38);
+    } else {
+        ctx.fillRect(obs.x+obs.w*.22,obs.y+t+30,120,30);
+        ctx.fillRect(obs.x+obs.w*.58,obs.y+obs.h*.55,42,90);
+    }
+
+    // 실제 창문: 멀쩡할 때는 유리/프레임, 깨지면 빈 창틀만 남는다.
+    getHouseWindowOpenings(obs).forEach(w=>{
+        const r=getHouseOpeningRect(obs,w);
+        ctx.strokeStyle='rgba(220,245,255,.82)'; ctx.lineWidth=3;
+        if(!w.isBroken){
+            ctx.fillStyle='rgba(105,190,220,.68)';
+            ctx.fillRect(r.x,r.y,r.w,r.h);
+            ctx.strokeRect(r.x,r.y,r.w,r.h);
+            ctx.strokeStyle='rgba(40,80,90,.85)';ctx.lineWidth=2;
+            ctx.beginPath();
+            if(w.side==='top'||w.side==='bottom'){
+                ctx.moveTo(r.x+r.w/2,r.y);ctx.lineTo(r.x+r.w/2,r.y+r.h);
+            } else {
+                ctx.moveTo(r.x,r.y+r.h/2);ctx.lineTo(r.x+r.w,r.y+r.h/2);
+            }
+            ctx.stroke();
+        } else {
+            ctx.fillStyle='rgba(15,20,22,.35)';ctx.fillRect(r.x,r.y,r.w,r.h);
+            ctx.strokeStyle='rgba(170,210,220,.55)';ctx.strokeRect(r.x,r.y,r.w,r.h);
+            // 깨진 유리 조각 가장자리
+            ctx.strokeStyle='rgba(190,235,245,.55)';ctx.lineWidth=1.5;
+            for(let k=0;k<4;k++){
+                ctx.beginPath();
+                if(w.side==='top'||w.side==='bottom'){
+                    const xx=r.x+(k+.5)*r.w/4;ctx.moveTo(xx,r.y);ctx.lineTo(xx+(k%2?6:-6),r.y+r.h*.55);
+                }else{
+                    const yy=r.y+(k+.5)*r.h/4;ctx.moveTo(r.x,yy);ctx.lineTo(r.x+r.w*.55,yy+(k%2?6:-6));
+                }
+                ctx.stroke();
+            }
+        }
+    });
+    ctx.restore();
+}
+
+function isViewerInHouseTransition(viewer, obs) {
+    if (!viewer || !obs || obs.type !== 'house') return false;
+    const pad = (obs.wallThickness || 20) + 6;
+    if (isPointInsideHouse(viewer.x, viewer.y, obs, pad)) return true;
+
+    if(doorClosed(obs))return false;
+    // 문턱에 걸쳐 있을 때 집 내부 판정이 프레임마다 바뀌지 않도록 문 주변에 전이 구역을 둔다.
+    const door = getHouseDoorOpening(obs);
+    const r = getHouseOpeningRect(obs, door);
+    const extraAlong = 18;
+    const extraAcross = 34;
+    let tr;
+    if (door.side === 'top' || door.side === 'bottom') {
+        tr = { x: r.x - extraAlong, y: r.y - extraAcross, w: r.w + extraAlong * 2, h: r.h + extraAcross * 2 };
+    } else {
+        tr = { x: r.x - extraAcross, y: r.y - extraAlong, w: r.w + extraAcross * 2, h: r.h + extraAlong * 2 };
+    }
+    return viewer.x >= tr.x && viewer.x <= tr.x + tr.w && viewer.y >= tr.y && viewer.y <= tr.y + tr.h;
+}
+
+function getRoofAlpha(obs){
+    const viewer = isSpectating && spectateTarget ? spectateTarget : myPlayer;
+    return isViewerInHouseTransition(viewer, obs) ? 0.13 : 0.96;
+}
+
+function drawHouseRoofShape(obs, alpha=1) {
+    const kind=obs.roofKind||'gable', st=obs.style||0;
+    const roofs=['#59473d','#455358','#654d46','#4d465d','#57583f','#624f39'];
+    ctx.globalAlpha=alpha;
+    // 지붕 그림자도 여러 겹으로 퍼지게 하여 자연스럽게 보이도록 처리
+    ctx.fillStyle='rgba(0,0,0,.045)'; ctx.fillRect(obs.x+18,obs.y+20,obs.w,obs.h);
+    ctx.fillStyle='rgba(0,0,0,.055)'; ctx.fillRect(obs.x+13,obs.y+15,obs.w,obs.h);
+    ctx.fillStyle='rgba(0,0,0,.065)'; ctx.fillRect(obs.x+9,obs.y+11,obs.w,obs.h);
+    ctx.fillStyle=roofs[st%roofs.length];
+    // 모든 지붕 타입에 공통 바탕을 먼저 깔아 외벽과 지붕 사이가 벌어져 보이는 틈을 없앤다.
+    // 장식용 지붕 모양은 이 바탕 위에 추가된다.
+    ctx.fillRect(obs.x-10, obs.y-10, obs.w+20, obs.h+20);
+    if(kind==='gable'){
+        ctx.fillRect(obs.x-8,obs.y-8,obs.w+16,obs.h+16);
+        ctx.strokeStyle='rgba(230,220,200,.26)';ctx.lineWidth=4;
+        ctx.beginPath();ctx.moveTo(obs.x+obs.w/2,obs.y-8);ctx.lineTo(obs.x+obs.w/2,obs.y+obs.h+8);ctx.stroke();
+        for(let yy=obs.y+12;yy<obs.y+obs.h;yy+=28){ctx.strokeStyle='rgba(0,0,0,.10)';ctx.beginPath();ctx.moveTo(obs.x,yy);ctx.lineTo(obs.x+obs.w,yy);ctx.stroke();}
+    } else if(kind==='hip'){
+        ctx.beginPath();ctx.moveTo(obs.x+obs.w*.18,obs.y-10);ctx.lineTo(obs.x+obs.w*.82,obs.y-10);ctx.lineTo(obs.x+obs.w+10,obs.y+obs.h*.22);ctx.lineTo(obs.x+obs.w+10,obs.y+obs.h*.78);ctx.lineTo(obs.x+obs.w*.82,obs.y+obs.h+10);ctx.lineTo(obs.x+obs.w*.18,obs.y+obs.h+10);ctx.lineTo(obs.x-10,obs.y+obs.h*.78);ctx.lineTo(obs.x-10,obs.y+obs.h*.22);ctx.closePath();ctx.fill();
+        ctx.strokeStyle='rgba(255,255,255,.16)';ctx.stroke();
+    } else if(kind==='flat'){
+        ctx.fillRect(obs.x-7,obs.y-7,obs.w+14,obs.h+14);
+        ctx.fillStyle='rgba(0,0,0,.17)';ctx.fillRect(obs.x+30,obs.y+30,70,50);ctx.fillRect(obs.x+obs.w-92,obs.y+obs.h-74,62,44);
+    } else if(kind==='split'){
+        ctx.fillRect(obs.x-8,obs.y-8,obs.w+16,obs.h+16);
+        ctx.fillStyle='rgba(255,255,255,.08)';ctx.fillRect(obs.x+obs.w*.48,obs.y-8,obs.w*.08,obs.h+16);
+        ctx.strokeStyle='rgba(0,0,0,.16)';ctx.lineWidth=5;ctx.strokeRect(obs.x+12,obs.y+12,obs.w-24,obs.h-24);
+    } else {
+        ctx.fillRect(obs.x-8,obs.y-8,obs.w+16,obs.h+16);
+        ctx.strokeStyle='rgba(230,230,230,.18)';ctx.lineWidth=3;
+        for(let xx=obs.x+8;xx<obs.x+obs.w;xx+=32){ctx.beginPath();ctx.moveTo(xx,obs.y-5);ctx.lineTo(xx,obs.y+obs.h+5);ctx.stroke();}
+    }
+    if((obs.seed||0)>.34){ctx.fillStyle='#343434';ctx.fillRect(obs.x+obs.w*.72,obs.y+obs.h*.20,24,30);}
+}
+
+function buildRoofVisionPath(obs, viewer) {
+    const p = new Path2D();
+    getRoofVisionOpenings(obs).forEach(op=>addRoofVisionCutoutPath(p,obs,viewer,op));
+    return p;
+}
+
+function getCachedRoofVisionPath(obs, viewer){
+    const now=performance.now();
+    const c=obs._roofVisionCache;
+    if(c && now-c.time<34 && Math.hypot(viewer.x-c.x,viewer.y-c.y)<6) return c.path;
+    const path=buildRoofVisionPath(obs,viewer);
+    obs._roofVisionCache={time:now,x:viewer.x,y:viewer.y,path};
+    return path;
+}
+
+function drawHouseRoof(obs){
+    if(obs.type!=='house') return;
+    const viewer = isSpectating && spectateTarget ? spectateTarget : myPlayer;
+    const viewerInside = isViewerInHouseTransition(viewer, obs);
+    ctx.save();
+
+    if(viewerInside){
+        // 집 안에서는 지붕 전체를 매우 연하게 유지.
+        drawHouseRoofShape(obs,0.13);
+        ctx.restore();
+        return;
+    }
+
+    const visionPath = getCachedRoofVisionPath(obs,viewer);
+
+    // 같은 시야 계산을 두 번 하지 않고 Path2D를 재사용한다.
+    const opaquePath = new Path2D();
+    opaquePath.rect(obs.x-18,obs.y-18,obs.w+36,obs.h+36);
+    opaquePath.addPath(visionPath);
+    ctx.save();
+    try { ctx.clip(opaquePath,'evenodd'); } catch(e) { ctx.clip(opaquePath); }
+    drawHouseRoofShape(obs,0.96);
+    ctx.restore();
+
+    // 2차: 문/창문으로 실제 보이는 부분은 '70% 투명' = 30% 불투명.
+    // 완전히 사라지지 않아 전환이 덜 끊겨 보인다.
+    ctx.save();
+    ctx.clip(visionPath);
+    drawHouseRoofShape(obs,0.30);
+    ctx.restore();
+
+    // 경계가 너무 딱 끊겨 보이지 않도록 얇은 반투명 완충층.
+    ctx.save();
+    ctx.clip(visionPath);
+    ctx.globalAlpha=0.035;
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(obs.x-12,obs.y-12,obs.w+24,obs.h+24);
+    ctx.restore();
+
+    ctx.restore();
+}
+
+function isObstacleInRenderRange(obs, margin=180){
+    const l=camera.x-canvas.width/2-margin, r=camera.x+canvas.width/2+margin;
+    const t=camera.y-canvas.height/2-margin, b=camera.y+canvas.height/2+margin;
+    return obs.x+obs.w>=l && obs.x<=r && obs.y+obs.h>=t && obs.y<=b;
+}
+
+function drawDesignedObstacle(obs){
+    if(!isObstacleInRenderRange(obs,220))return;
+    // 이전 버전에서 type이 빠진 데스매치 장애물도 그림자 위치에 실제 벽으로 복구한다.
+    if (obs.type === 'wall' || (selectedMode === 'normal' && !obs.type)) {
+        ctx.save();
+
+        // 데스매치 골목 벽 본체
+        ctx.fillStyle = '#5a5f66';
+        ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+
+        // 벽 상단 밝은 면
+        ctx.fillStyle = '#747b84';
+        if (obs.w >= obs.h) {
+            ctx.fillRect(obs.x, obs.y, obs.w, Math.min(8, obs.h * 0.28));
+        } else {
+            ctx.fillRect(obs.x, obs.y, Math.min(8, obs.w * 0.28), obs.h);
+        }
+
+        // 외곽선
+        ctx.strokeStyle = 'rgba(18,22,28,.95)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(obs.x + 1.5, obs.y + 1.5, obs.w - 3, obs.h - 3);
+
+        // 약한 표면 디테일
+        ctx.strokeStyle = 'rgba(255,255,255,.07)';
+        ctx.lineWidth = 1;
+        if (obs.w >= obs.h) {
+            for (let x = obs.x + 32; x < obs.x + obs.w; x += 48) {
+                ctx.beginPath();
+                ctx.moveTo(x, obs.y + 6);
+                ctx.lineTo(x, obs.y + obs.h - 6);
+                ctx.stroke();
+            }
+        } else {
+            for (let y = obs.y + 32; y < obs.y + obs.h; y += 48) {
+                ctx.beginPath();
+                ctx.moveTo(obs.x + 6, y);
+                ctx.lineTo(obs.x + obs.w - 6, y);
+                ctx.stroke();
+            }
+        }
+
+        ctx.restore();
+        return;
+    }
+
+    if(!isObstacleInRenderRange(obs)) return;
+    if(obs.type==='tree') drawTreeObstacle(obs);
+    else if(obs.type==='house') drawHouseBase(obs);
+}
+
+function drawGunshotIndicators() {
+    if (myPlayer.isDead || myPlayer.hp <= 0 || isSpectating || isRespawning) return;
+
+    const maxDist = 2500;
+    const now = Date.now();
+
+    gunshotEvents.forEach(snd => {
+        if (snd.shooterId === myPlayer.id) return;
+
+        const dst = Math.hypot(snd.x - myPlayer.x, snd.y - myPlayer.y);
+        if (dst <= maxDist && dst > 30) {
+            const angle = Math.atan2(snd.y - myPlayer.y, snd.x - myPlayer.x);
+            const duration = 800;
+            const elapsed = now - snd.time;
+            const alpha = Math.max(0, 1 - elapsed / duration);
+
+            ctx.save();
+            ctx.translate(myPlayer.x, myPlayer.y);
+            ctx.rotate(angle);
+
+            const distFromPlayer = 60;
+            ctx.fillStyle = `rgba(255, 50, 50, ${alpha})`;
+            ctx.beginPath();
+            ctx.moveTo(distFromPlayer + 15, 0);
+            ctx.lineTo(distFromPlayer, -10);
+            ctx.lineTo(distFromPlayer + 4, 0);
+            ctx.lineTo(distFromPlayer, 10);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.restore();
+        }
+    });
+}
+
+function drawScopeReticle() {
+    if (!gameStarted || isSpectating || isRespawning || myPlayer.isDead || myPlayer.hp <= 0) return;
+    if (!myPlayer.weapon || !myPlayer.isAiming) return;
+
+    const scope = myPlayer.equippedScope || '1x';
+    const cx = isMobile ? canvas.width / 2 : mouse.x, cy = isMobile ? canvas.height / 2 : mouse.y;
+    ctx.save();
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle='rgba(245,245,245,.92)';
+    ctx.fillStyle='rgba(255,70,70,.95)';
+    ctx.lineWidth=1.7;
+
+    if(scope==='1x'){
+        ctx.beginPath(); ctx.arc(cx,cy,14,0,Math.PI*2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx,cy,2.4,0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(cx-24,cy);ctx.lineTo(cx-17,cy);ctx.moveTo(cx+17,cy);ctx.lineTo(cx+24,cy);ctx.stroke();
+    } else if(scope==='2x'){
+        ctx.beginPath(); ctx.arc(cx,cy,20,0,Math.PI*2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx-34,cy);ctx.lineTo(cx-5,cy);ctx.moveTo(cx+5,cy);ctx.lineTo(cx+34,cy);ctx.moveTo(cx,cy-34);ctx.lineTo(cx,cy-5);ctx.moveTo(cx,cy+5);ctx.lineTo(cx,cy+34);ctx.stroke();
+        ctx.beginPath();ctx.arc(cx,cy,2,0,Math.PI*2);ctx.fill();
+    } else if(scope==='3x'){
+        ctx.beginPath();ctx.arc(cx,cy,25,0,Math.PI*2);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(cx-40,cy);ctx.lineTo(cx-7,cy);ctx.moveTo(cx+7,cy);ctx.lineTo(cx+40,cy);ctx.moveTo(cx,cy-40);ctx.lineTo(cx,cy-7);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(cx-6,cy+7);ctx.lineTo(cx,cy+1);ctx.lineTo(cx+6,cy+7);ctx.stroke();
+    } else if(scope==='4x'){
+        ctx.lineWidth=1.4;
+        ctx.beginPath();ctx.moveTo(cx-48,cy);ctx.lineTo(cx-5,cy);ctx.moveTo(cx+5,cy);ctx.lineTo(cx+48,cy);ctx.moveTo(cx,cy-48);ctx.lineTo(cx,cy+55);ctx.stroke();
+        for(let i=1;i<=4;i++){const yy=cy+i*10;ctx.beginPath();ctx.moveTo(cx-5-i*1.5,yy);ctx.lineTo(cx+5+i*1.5,yy);ctx.stroke();}
+        ctx.beginPath();ctx.arc(cx,cy,2,0,Math.PI*2);ctx.fill();
+    } else { // 8x
+        ctx.lineWidth=1.2;
+        ctx.beginPath();ctx.arc(cx,cy,62,0,Math.PI*2);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(cx-72,cy);ctx.lineTo(cx-4,cy);ctx.moveTo(cx+4,cy);ctx.lineTo(cx+72,cy);ctx.moveTo(cx,cy-72);ctx.lineTo(cx,cy+78);ctx.stroke();
+        for(let i=1;i<=6;i++){const yy=cy+i*10; const half=4+i*2;ctx.beginPath();ctx.moveTo(cx-half,yy);ctx.lineTo(cx+half,yy);ctx.stroke();}
+        for(let i=1;i<=3;i++){const xx=14*i;ctx.beginPath();ctx.moveTo(cx-xx,cy-4);ctx.lineTo(cx-xx,cy+4);ctx.moveTo(cx+xx,cy-4);ctx.lineTo(cx+xx,cy+4);ctx.stroke();}
+        ctx.beginPath();ctx.arc(cx,cy,1.8,0,Math.PI*2);ctx.fill();
+    }
+    ctx.font='bold 12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
+    ctx.fillStyle='rgba(255,255,255,.78)'; ctx.fillText(scope, cx, cy+72);
+    ctx.restore();
+}
+
+function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.translate(canvas.width / 2 - camera.x, canvas.height / 2 - camera.y);
+
+    ctx.fillStyle = '#2b2b2b';
+    ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+
+    ctx.strokeStyle = '#3a3a3a';
+    ctx.lineWidth = 2;
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillStyle = '#3a3a3a';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const gridSize = 100;
+    const startX = Math.floor((camera.x - canvas.width / 2) / gridSize) * gridSize;
+    const endX = startX + canvas.width + gridSize * 2;
+    const startY = Math.floor((camera.y - canvas.height / 2) / gridSize) * gridSize;
+    const endY = startY + canvas.height + gridSize * 2;
+
+    for (let x = startX; x < endX; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, startY); ctx.lineTo(x, endY);
+        ctx.stroke();
+    }
+    for (let y = startY; y < endY; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(startX, y); ctx.lineTo(endX, y);
+        ctx.stroke();
+    }
+
+    for (let x = startX; x < endX; x += gridSize) {
+        for (let y = startY; y < endY; y += gridSize) {
+            if (x >= 0 && x < WORLD_SIZE && y >= 0 && y < WORLD_SIZE) {
+                ctx.fillText('#', x + gridSize / 2, y + gridSize / 2);
+            }
+        }
+    }
+
+    ctx.strokeStyle = '#ff0000';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+
+    if (selectedMode === 'br') {
+        ctx.strokeStyle = 'rgba(0, 255, 204, 0.8)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(zone.x, zone.y, zone.radius, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    // 집 내부 바닥/벽과 나무를 먼저 그린다.
+    const visibleObstacles=nearbyObstacles(camera.x-canvas.width/2-220,camera.y-canvas.height/2-220,camera.x+canvas.width/2+220,camera.y+canvas.height/2+220);
+    visibleObstacles.forEach(obs => drawDesignedObstacle(obs));
+
+    // 그림자는 월드 오브젝트 뒤에만 깔고, 플레이어/총알/지붕 위에는 덮지 않는다.
+    drawFogOfWar();
+
+    // 아이템은 집 실내 위에 표시되고, 외부에서는 지붕에 가려진다.
+    if(selectedMode !== 'normal') {
+        droppedItems.forEach(item => { if(Math.abs(item.x-camera.x)<canvas.width/2+220 && Math.abs(item.y-camera.y)<canvas.height/2+220) drawDesignedItem(item); });
+    }
+
+    bloodParticles.forEach(p => {
+        if (Math.abs(p.x-camera.x)>canvas.width/2+100 || Math.abs(p.y-camera.y)>canvas.height/2+100) return;
+        ctx.fillStyle = `rgba(200, 0, 0, ${p.alpha})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    bullets.forEach(b => {
+        if (Math.abs(b.x-camera.x)>canvas.width/2+120 || Math.abs(b.y-camera.y)>canvas.height/2+120) return;
+        ctx.strokeStyle = '#ffcc00';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(b.prevX, b.prevY);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+    });
+
+    if (myPlayer.hp > 0 && !myPlayer.isDead) {
+        drawPlayer(myPlayer);
+        drawGunshotIndicators();
+
+        if (isMobile && (mobileAimVec.x !== 0 || mobileAimVec.y !== 0)) {
+            const crosshairDist = 120;
+            const crossX = myPlayer.x + Math.cos(myPlayer.angle) * crosshairDist;
+            const crossY = myPlayer.y + Math.sin(myPlayer.angle) * crosshairDist;
+
+            ctx.strokeStyle = '#ff4444';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(crossX, crossY, 10, 0, Math.PI * 2);
+            ctx.moveTo(crossX - 14, crossY); ctx.lineTo(crossX + 14, crossY);
+            ctx.moveTo(crossX, crossY - 14); ctx.lineTo(crossX + 14, crossY);
+            ctx.stroke();
+        }
+    }
+
+    Object.values(remotePlayers).forEach(p => { if(Math.abs(p.x-camera.x)<canvas.width/2+160 && Math.abs(p.y-camera.y)<canvas.height/2+160) drawPlayer(p); });
+    aiBots.forEach(b => { if(Math.abs(b.x-camera.x)<canvas.width/2+160 && Math.abs(b.y-camera.y)<canvas.height/2+160) drawPlayer(b); });
+    drawGlassShards();
+    drawFootstepIndicators();
+
+    // 지붕은 마지막에 그려 외부에서는 실내/플레이어/아이템을 가리고,
+    // 집 안에서는 전체가 반투명하고, 집 밖에서는 문/창문으로 보이는 영역만 걷힌다.
+    visibleObstacles.forEach(obs => { if(obs.type==='house' && isObstacleInRenderRange(obs,220)) drawHouseRoof(obs); });
+    visibleObstacles.forEach(obs=>{if(obs.type==='house')drawHouseDoor(obs);});
+
+    ctx.restore();
+
+    drawScopeReticle();
+
+    renderMinimap();
+    if (document.getElementById('fullMapOverlay').style.display === 'flex') {
+        renderFullMap();
+    }
+}
+
+let lastMinimapRenderAt = 0;
+function mapTeammates(){
+    if(selectedMode!=='br')return [];
+    const viewer=isAssignedSpectator(myPlayer.id)?spectateTarget:myPlayer;
+    if(!viewer)return [];
+    return [...roomHumans(),...aiBots].filter(p=>p.id!==viewer.id&&p.hp>0&&!p.isDead&&!isAssignedSpectator(p.id)&&areAllies(viewer,p));
+}
+function drawTeamMapMarkers(context,scale,width,height){
+    context.save();context.font='bold 11px sans-serif';context.textAlign='center';context.textBaseline='bottom';
+    for(const p of mapTeammates()){
+        const x=p.x*scale,y=p.y*scale;
+        context.fillStyle='#58a6ff';context.beginPath();context.arc(x,y,4,0,Math.PI*2);context.fill();
+        const tx=Math.max(35,Math.min(width-35,x)),ty=Math.max(14,y-7);
+        context.strokeStyle='#111';context.lineWidth=3;context.strokeText(p.name,tx,ty,100);
+        context.fillStyle='#a8d6ff';context.fillText(p.name,tx,ty,100);
+    }
+    context.restore();
+}
+
+function renderMinimap() {
+    const mmNow = performance.now();
+    if (mmNow - lastMinimapRenderAt < 90) return;
+    lastMinimapRenderAt = mmNow;
+    mCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+    const scale = minimapCanvas.width / WORLD_SIZE;
+
+    mCtx.save();
+    mCtx.beginPath();
+    mCtx.arc(minimapCanvas.width / 2, minimapCanvas.height / 2, minimapCanvas.width / 2, 0, Math.PI * 2);
+    mCtx.clip();
+
+    mCtx.fillStyle = '#151515';
+    mCtx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+
+    mCtx.fillStyle = '#333344';
+    obstacles.forEach(obs => {
+        mCtx.fillRect(obs.x * scale, obs.y * scale, obs.w * scale, obs.h * scale);
+    });
+
+    if (selectedMode === 'br') {
+        mCtx.strokeStyle = 'rgba(0, 255, 204, 0.6)';
+        mCtx.lineWidth = 2;
+        mCtx.beginPath();
+        mCtx.arc(zone.x * scale, zone.y * scale, zone.radius * scale, 0, Math.PI * 2);
+        mCtx.stroke();
+    }
+
+    gunshotEvents.forEach(snd => {
+        const dx = snd.x - myPlayer.x;
+        const dy = snd.y - myPlayer.y;
+        const angle = Math.atan2(dy, dx);
+
+        const indicatorRadius = 80;
+        const ix = (minimapCanvas.width / 2) + Math.cos(angle) * indicatorRadius;
+        const iy = (minimapCanvas.height / 2) + Math.sin(angle) * indicatorRadius;
+
+        mCtx.fillStyle = '#ff4444';
+        mCtx.beginPath();
+        mCtx.arc(ix, iy, 5, 0, Math.PI * 2);
+        mCtx.fill();
+    });
+
+    mCtx.restore();
+    drawTeamMapMarkers(mCtx,scale,minimapCanvas.width,minimapCanvas.height);
+
+    mCtx.strokeStyle = '#00ffcc';
+    mCtx.lineWidth = 2;
+    mCtx.beginPath();
+    mCtx.arc(minimapCanvas.width / 2, minimapCanvas.height / 2, (minimapCanvas.width / 2) - 1, 0, Math.PI * 2);
+    mCtx.stroke();
+}
+
+function renderFullMap() {
+    fCtx.clearRect(0, 0, fullMapCanvas.width, fullMapCanvas.height);
+    const scale = fullMapCanvas.width / WORLD_SIZE;
+
+    fCtx.fillStyle = '#111';
+    fCtx.fillRect(0, 0, fullMapCanvas.width, fullMapCanvas.height);
+
+    fCtx.fillStyle = '#333344';
+    obstacles.forEach(obs => {
+        fCtx.fillRect(obs.x * scale, obs.y * scale, obs.w * scale, obs.h * scale);
+    });
+
+    if (selectedMode === 'br') {
+        fCtx.strokeStyle = 'rgba(0, 255, 204, 0.8)';
+        fCtx.lineWidth = 2;
+        fCtx.beginPath();
+        fCtx.arc(zone.x * scale, zone.y * scale, zone.radius * scale, 0, Math.PI * 2);
+        fCtx.stroke();
+
+        fCtx.strokeStyle = 'rgba(255, 204, 0, 0.6)';
+        fCtx.lineWidth = 1;
+        fCtx.beginPath();
+        fCtx.arc(targetZone.x * scale, targetZone.y * scale, targetZone.radius * scale, 0, Math.PI * 2);
+        fCtx.stroke();
+    }
+
+    drawTeamMapMarkers(fCtx,scale,fullMapCanvas.width,fullMapCanvas.height);
+    if (myPlayer.hp > 0 && !myPlayer.isDead) {
+        fCtx.fillStyle = '#00ffcc';
+        fCtx.beginPath();
+        fCtx.arc(myPlayer.x * scale, myPlayer.y * scale, 5, 0, Math.PI * 2);
+        fCtx.fill();
+    }
+}
+
+let lastLoopErrorAt = 0;
+function gameLoop() {
+    try {
+        update();
+        render();
+    } catch (err) {
+        // 한 프레임 오류 때문에 게임 전체 애니메이션 루프가 영구 정지하지 않게 한다.
+        const now=performance.now();
+        if(now-lastLoopErrorAt>1500){ console.error('gameLoop recovered:',err); lastLoopErrorAt=now; }
+    }
+    if (gameStarted) requestAnimationFrame(gameLoop);
+}
