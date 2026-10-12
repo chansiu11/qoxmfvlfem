@@ -2385,14 +2385,14 @@ function initMobileControls() {
         if(isEditingKeys || isSpectating || isRespawning || joyTouchId !== null) return;
         const touch = e.changedTouches[0];
         joyTouchId = touch.identifier;
-
+        
         const rect = gameFrame.getBoundingClientRect();
         joyCenter = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-
+        
         joyContainer.style.left = joyCenter.x + 'px';
         joyContainer.style.top = joyCenter.y + 'px';
         joyContainer.style.display = 'block';
-
+        
         updateJoystick(touch);
     });
 
@@ -2440,10 +2440,10 @@ function initMobileControls() {
         if(isEditingKeys || isSpectating || isRespawning || aimTouchId !== null) return;
         const touch = e.changedTouches[0];
         aimTouchId = touch.identifier;
-
+        
         const rect = gameFrame.getBoundingClientRect();
         aimCenter = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-
+        
         aimPad.style.left = aimCenter.x + 'px';
         aimPad.style.top = aimCenter.y + 'px';
         aimPad.style.display = 'block';
@@ -2451,7 +2451,9 @@ function initMobileControls() {
         updateAim(touch);
         myPlayer.isAiming = true;
 
-
+        if (myPlayer.weapon === 'ar') {
+            myPlayer.isShooting = true;
+        }
     });
 
     window.addEventListener('touchmove', e => {
@@ -2465,11 +2467,20 @@ function initMobileControls() {
         for (let t of e.changedTouches) {
             if (t.identifier === aimTouchId) {
                 aimTouchId = null;
+                
+                if (myPlayer.weapon && myPlayer.weapon !== 'ar') {
+                    const now = Date.now();
+                    if (now - myPlayer.lastShootTime >= WEAPONS[myPlayer.weapon].cooldown) {
+                        shoot(myPlayer);
+                        myPlayer.lastShootTime = now;
+                    }
+                }
 
                 mobileAimVec = { x: 0, y: 0 };
                 aimPad.style.display = 'none';
                 aimKnob.style.top = '45px'; aimKnob.style.left = '45px';
                 myPlayer.isAiming = false;
+                myPlayer.isShooting = false;
             }
         }
     };
@@ -2490,21 +2501,6 @@ function initMobileControls() {
         aimKnob.style.top = (45 + dy) + 'px';
         mobileAimVec = { x: dx / maxDist, y: dy / maxDist };
     }
-
-    // Aim and fire have separate touch identities. Releasing aim never fires a shot.
-    const fireButton=document.getElementById('btnFire');
-    let fireTouchId=null;
-    const stopFire=()=>{fireTouchId=null;myPlayer.isShooting=false;fireButton.classList.remove('active');};
-    fireButton.addEventListener('touchstart',e=>{
-        if(isEditingKeys||isSpectating||isRespawning||myPlayer.isDead||myPlayer.isDowned||fireTouchId!==null)return;
-        e.preventDefault();e.stopPropagation();fireTouchId=e.changedTouches[0].identifier;
-        myPlayer.isShooting=true;fireButton.classList.add('active');
-    },{passive:false});
-    const releaseFire=e=>{for(const t of e.changedTouches)if(t.identifier===fireTouchId)stopFire();};
-    window.addEventListener('touchend',releaseFire);
-    window.addEventListener('touchcancel',releaseFire);
-    window.addEventListener('blur',stopFire);
-    document.addEventListener('visibilitychange',()=>{if(document.hidden)stopFire();});
 
     document.getElementById('btnReload').addEventListener('touchstart', (e) => { if(!isEditingKeys && !isSpectating && !isRespawning){ e.preventDefault(); reloadWeapon(myPlayer); } });
     const reviveButton=document.getElementById('btnRevive');

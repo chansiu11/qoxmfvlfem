@@ -180,8 +180,6 @@
             font-weight: bold; font-size: 13px; display: flex; align-items: center; justify-content: center;
             z-index: 40; pointer-events: auto;
         }
-        #btnFire { bottom:35px;right:40px;width:85px;height:85px;border-color:#ff6666;touch-action:none; }
-        #btnFire.active { background:rgba(255,68,68,.5); }
         #btnReload { bottom: 35px; right: 190px; }
         #btnSprint { bottom: 110px; right: 190px; border-color:#66ddff; color:#66ddff; }
         #btnSprint.active { background:rgba(0,170,255,.45); transform:scale(.94); }
@@ -353,9 +351,8 @@
             <div id="joystickKnob"></div>
         </div>
         <div id="aimPadContainer">
-            <div id="aimPadKnob"></div><span style="position:absolute;top:-24px;left:54px;color:#fff">조준</span>
+            <div id="aimPadKnob"></div>
         </div>
-        <div id="btnFire" class="mobile-btn touch-zone" role="button" aria-label="발사">발사</div>
         <div id="btnReload" class="mobile-btn touch-zone">장전</div>
         <div id="btnSprint" class="mobile-btn touch-zone">달리기</div>
         <div id="btnRevive" class="mobile-btn touch-zone">팀원 소생<br>(누르고 있기)</div>

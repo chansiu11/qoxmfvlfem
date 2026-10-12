@@ -27,7 +27,7 @@ Player movement and inventory selection retain the previous client-side behavior
 
 ## Controls
 
-Desktop controls are preserved. On mobile, the right touch area **only aims**. The new **발사** button fires while held, independently of the aiming finger; release, touch cancellation, backgrounding or loss of focus stops fire. The fire button participates in the existing mobile key layout editor.
+Desktop controls are preserved. Mobile controls are restored to the original combined aiming/firing touch area: holding aims and fires the AR, and releasing fires the sniper/shotgun. There is no separate fire button.
 
 ## Deployment order
 
@@ -37,4 +37,4 @@ Rooms, matches and items are in memory. Empty rooms are deleted; restarts/redepl
 
 ## Verification
 
-`npm test` checks real WebSocket room joining, owner authorization/transfer, continued snapshots after owner exit, movement propagation, ping, cleanup, bot/map simulation, projectile damage, shot rate limiting, slow-client snapshot drops, and independent mobile aim/fire touch handlers. Browser visual testing and real-device RTT should be done after deployment.
+`npm test` checks real WebSocket room joining, owner authorization/transfer, continued snapshots after owner exit, movement propagation, ping, cleanup, bot/map simulation, projectile damage, shot rate limiting, slow-client snapshot drops. Browser visual testing and real-device RTT should be done after deployment.
