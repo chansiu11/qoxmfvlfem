@@ -33,7 +33,7 @@ shoot=(p,spread)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spik
 const originalEntity=networkEntityState;
 networkEntityState=p=>{const state=originalEntity(p);if(selectedMode==='spike'){state._spikeUse=p===myPlayer?spikeHeld:!!p._spikeUse;state._spikeRound=spikeAppliedRound;}return state;};
 const originalSend=safeSend;
-safeSend=(c,data)=>{if(selectedMode==='spike'&&isHost&&data?.type==='SYNC'&&spikeMatch)data={...data,spike:spikeMatch.snapshot()};return originalSend(c,data);};
+safeSend=(c,data)=>{if(selectedMode==='spike'&&isHost&&data?.type==='SYNC'&&spikeMatch)data={...data,spike:spikeMatch.snapshot(getCombatEntityById(c.playerId)||{teamId:"spectator"})};return originalSend(c,data);};
 function spikeApply(state){
  if(!state)return;spikeState=state;
  for(const actor of state.actors||[]){const p=getCombatEntityById(actor.id);if(p)p.teamId=actor.teamId;}
@@ -127,14 +127,14 @@ function spikeUI(){
  document.getElementById('spikeStatus').textContent=`일반게임 · ${s.round}라운드 | 청록 ${s.score[0]} : ${s.score[1]} 코랄 | ${attacking?'공격':'수비'} | ${s.phase==='prep'?'준비':s.phase==='planted'?'폭발까지':s.phase==='end'?s.result:'라운드'} ${Math.max(0,Math.ceil(s.time))}초`;
  const prep=s.phase==='prep'&&!myPlayer.isDead;document.getElementById('spikeWeaponBar').style.display=prep?'block':'none';
  let hint=prep?'스폰 지역에서 총기를 바꿀 수 있습니다. 준비 후 출발하세요.':s.phase==='end'?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
- if(s.actor)hint+=` · ${Math.round(s.progress/(b.planted?7:4)*100)}%`;
+ if(s.actor&&(b.planted||attacking))hint+=` · ${Math.round(s.progress/(b.planted?7:4)*100)}%`;
  document.getElementById('spikePrompt').textContent=hint;
 }
 function drawSpikeMap(context,scale=1){
  if(selectedMode!=='spike')return;context.save();context.scale(scale,scale);
  for(let i=0;i<2;i++){const r=SpikeRules.SPAWNS[i];context.fillStyle=i?'#4d708533':'#af784333';context.fillRect(r.x,r.y,r.w,r.h);context.strokeStyle=i?'#77beed':'#ffc270';context.lineWidth=3;context.strokeRect(r.x,r.y,r.w,r.h);context.fillStyle='white';context.font='bold 25px sans-serif';context.fillText(i?'수비 스폰':'공격 스폰',r.x+r.w/2,r.y+r.h/2);}
  for(const s of SpikeRules.SITES){context.fillStyle='#dbb45422';context.strokeStyle='#ffce67';context.beginPath();context.arc(s.x,s.y,s.r,0,Math.PI*2);context.fill();context.stroke();context.fillStyle='#ffdb8b';context.font='bold 60px sans-serif';context.fillText(s.name,s.x,s.y);}
- const b=spikeState?.bomb;if(b){context.fillStyle=b.planted?'#ff5757':'#fff5a9';context.fillRect(b.x-12,b.y-12,24,24);}
+ const b=spikeState?.bomb;if(b&&!b.hidden&&(b.planted||myPlayer.teamId===`team_${spikeState.attackTeam}`)){context.fillStyle=b.planted?'#ff5757':'#fff5a9';context.fillRect(b.x-12,b.y-12,24,24);}
  context.restore();
 }
 const oldMini=renderMinimap;
