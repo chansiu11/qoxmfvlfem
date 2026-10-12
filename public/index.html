@@ -18,7 +18,7 @@ html,body{margin:0;width:100%;height:100%;background:#050505;color:#fff;font-fam
     let encoded='';
     for(let i=1;i<=10;i++){
       msg.textContent=`게임 데이터 ${i}/10 불러오는 중`;
-      const name=`game-data/part${String(i).padStart(2,'0')}.txt`;
+      const name=`game-data/part${String(i).padStart(2,'0')}.txt?v=mobile-fire-2`;
       const res=await fetch(name,{cache:'no-store'});
       if(!res.ok) throw new Error(`${name} 로드 실패 (${res.status})`);
       encoded+=(await res.text()).trim();
