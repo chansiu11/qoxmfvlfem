@@ -1,25 +1,63 @@
 /* Shared objective rules; no DOM, timers or transport dependencies. */
 (function(root){
  const SIZE=2400;
- const SPAWNS=[{x:70,y:850,w:260,h:700},{x:2070,y:850,w:260,h:700}];
- const SITES=[{name:'A',x:1400,y:600,r:130},{name:'B',x:1400,y:1800,r:130}];
- // A fixed connected maze: at most two onward choices, with dead ends.
- const LINKS=[],WALLS=[];
- const parent=Array.from({length:36},(_,i)=>i),degree=Array(36).fill(0);
- const find=i=>parent[i]===i?i:(parent[i]=find(parent[i]));
- const join=(a,b)=>{if(find(a)===find(b)||degree[a]>=3||degree[b]>=3)return;parent[find(a)]=find(b);degree[a]++;degree[b]++;LINKS.push([a,b]);};
- join(12,18);join(17,23); // Keep both spawn rooms unobstructed.
- let seed=731;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed;};
- const edges=[];
- for(let y=0;y<6;y++)for(let x=0;x<6;x++){const n=y*6+x;if(x<5)edges.push([n,n+1,random()]);if(y<5)edges.push([n,n+6,random()]);}
- edges.sort((a,b)=>a[2]-b[2]);for(const [a,b] of edges)join(a,b);
- const wall=(x,y,w,h)=>WALLS.push({type:'wall',x,y,w,h});
- wall(0,0,SIZE,40);wall(0,SIZE-40,SIZE,40);wall(0,0,40,SIZE);wall(SIZE-40,0,40,SIZE);
- for(let y=0;y<6;y++)for(let x=0;x<6;x++){
-  const n=y*6+x,open=m=>LINKS.some(([a,b])=>a===n&&b===m||b===n&&a===m);
-  if(x<5){const xx=(x+1)*400-30;if(open(n+1)){wall(xx,y*400,60,80);wall(xx,y*400+320,60,80);}else wall(xx,y*400,60,400);}
-  if(y<5){const yy=(y+1)*400-30;if(open(n+6)){if(n!==12&&n!==17){wall(x*400,yy,80,60);wall(x*400+320,yy,80,60);}}else wall(x*400,yy,400,60);}
+ // Hand-built 2D adaptation of Riot's official Ascent overhead layout.
+ // Reference: https://playvalorant.com/en-gb/maps/#ascent
+ // Coordinates below use the 640px reference; runtime geometry is 2400 units.
+ const SCALE=SIZE/640;
+ const rect=([x,y,w,h])=>({x:x*SCALE,y:y*SCALE,w:w*SCALE,h:h*SCALE});
+ const MAP_NAME='어센트 · ASCENT';
+ const SPAWNS=[[344,116,80,64],[260,528,64,56]].map(rect);
+ const SITES=[{name:'A',x:128*SCALE,y:424*SCALE,r:32*SCALE},{name:'B',x:496*SCALE,y:440*SCALE,r:34*SCALE}];
+ const FLOORS=[
+  // Attacker spawn and the split toward A lobby / B lobby.
+  [336,48,60,64],[336,108,96,84],[212,136,220,44],[220,176,24,48],
+  [408,176,24,112],[408,248,84,80],[464,320,28,60],
+  // A lobby, A main and the wine pocket.
+  [168,200,48,112],[184,300,28,40],[64,316,148,24],[80,336,92,120],
+  // Mid top / catwalk and courtyard. Walls separate the parallel routes.
+  [212,212,96,28],[268,236,40,64],[212,288,72,32],
+  [268,280,92,80],[356,284,48,44],[396,276,20,52],
+  // A link (Tree), garden and window / rafters defender approach.
+  [168,360,80,40],[224,316,24,64],[192,396,32,64],[192,436,56,24],
+  [64,456,152,24],[148,440,24,32],[168,476,24,52],[168,508,88,24],
+  [232,448,24,88],
+  // Mid bottom, pizza and market into B.
+  [236,360,124,32],[304,388,32,52],[308,416,80,44],[368,436,40,24],
+  // B main, lane, site and boathouse.
+  [396,364,84,28],[448,380,32,36],[392,400,144,92],[532,424,36,68],
+  // Defender spawn and rotation behind the two sites.
+  [256,500,76,88],[248,508,188,24],[412,456,24,60],[272,472,60,40],[308,448,24,36]
+ ].map(rect);
+ const COVERS=[
+  [108,408,12,12],[144,416,8,24], // A generator / default cover
+  [280,316,16,12],[332,348,12,12], // Mid courtyard angles
+  [468,420,12,12],[488,452,20,12],[520,476,12,12], // B default / logs
+  [440,264,12,12],[248,148,12,12] // Lobby / spawn cover outside buy zones
+ ].map(r=>({...rect(r),type:'wall',cover:true}));
+ const CALLOUTS=[['A MAIN',152,326],['A LOBBY',191,250],['MID TOP',250,224],
+  ['CATWALK',237,304],['MID',312,342],['TREE',203,380],['GARDEN',207,422],
+  ['RAFTERS',116,468],['MARKET',350,442],['MID LINK',377,310],
+  ['B LOBBY',447,301],['B MAIN',427,379],['BOATHOUSE',550,465]]
+  .map(([name,x,y])=>({name,x:x*SCALE,y:y*SCALE}));
+ // Merge solid cells into rectangles once, so drawing, bullets, fog and bot
+ // navigation all use the same boundaries without a per-frame tile scan.
+ const WALLS=[],GRID=160,CELL=SIZE/GRID;
+ let previous=new Map();
+ for(let row=0;row<GRID;row++){
+  const runs=new Map();let start=-1;
+  for(let col=0;col<=GRID;col++){
+   const x=(col+.5)*CELL,y=(row+.5)*CELL;
+   const solid=col<GRID&&!FLOORS.some(r=>x>=r.x&&x<r.x+r.w&&y>=r.y&&y<r.y+r.h);
+   if(solid&&start<0)start=col;
+   if(!solid&&start>=0){const key=start+':'+col;let w=previous.get(key);
+    if(w)w.h+=CELL;else{w={type:'wall',x:start*CELL,y:row*CELL,w:(col-start)*CELL,h:CELL};WALLS.push(w);}
+    runs.set(key,w);start=-1;
+   }
+  }
+  previous=runs;
  }
+ WALLS.push(...COVERS);
  const alive=p=>p&&p.hp>0&&!p.isDead&&!p.spectator;
  const inside=(p,r)=>p.x>=r.x+20&&p.x<=r.x+r.w-20&&p.y>=r.y+20&&p.y<=r.y+r.h-20;
  class Match{
@@ -31,7 +69,8 @@
    const indexes=[0,0];this.spawns={};
    for(const p of this.actors()){
     if(p.spectator)continue;const team=this.team(p),r=this.spawn(p),i=indexes[team-1]++;
-    p.x=r.x+60+(Math.floor(i/8)%3)*60;p.y=r.y+65+(i%8)*78;
+    const cols=Math.max(1,Math.floor((r.w-40)/55)),rows=Math.max(1,Math.floor((r.h-40)/55));
+    p.x=r.x+35+(i%cols)*55;p.y=r.y+35+(Math.floor(i/cols)%rows)*55;
     p.hp=200;p.maxHp=200;p.isDead=false;p.isDowned=false;p.isMoving=false;p.isShooting=false;p._spikeUse=false;p.isReloading=false;
     p.weapon=['ar','sniper','shotgun'].includes(p.weapon)?p.weapon:'ar';
     p.clipAmmo={ar:30,sniper:5,shotgun:8}[p.weapon];p.reserveAmmo=p.clipAmmo*4;p.equippedBodyArmor=null;p.equippedHelmet=null;
@@ -75,5 +114,5 @@
   }
   snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo}))};}
  }
- root.SpikeRules={Match,SIZE,SPAWNS,SITES,WALLS,LINKS,inside};
+ root.SpikeRules={Match,SIZE,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

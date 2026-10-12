@@ -44,13 +44,13 @@ test('host/guest snapshots agree on spawn, weapon choice, locked combat health a
  guest.run(`isHost=false;myPlayer.id='guest';`);
  const packets=host.run('out.slice()');for(const data of packets)guest.run(`handleNetworkData(${data})`);
  assert.equal(guest.run('selectedMode'),'spike');assert.equal(guest.run('spikeAppliedRound'),1);
- assert.equal(guest.run('myPlayer.teamId'),'team_2');assert(guest.run('myPlayer.x>1960'));
+ assert.equal(guest.run('myPlayer.teamId'),'team_2');assert(guest.run('SpikeRules.inside(myPlayer,SpikeRules.SPAWNS[1])'));
  host.run(`handleNetworkData({type:'SPIKE_WEAPON',player:{id:'guest'},weapon:'shotgun'});lastHostSyncAt=0;updateNetwork();`);
  guest.run(`handleNetworkData(${host.run('out.at(-1)')})`);assert.equal(guest.run('myPlayer.weapon'),'shotgun');
  host.run(`remotePlayers.guest.hp=80;handleNetworkData({type:'SYNC',player:{id:'guest',_spikeRound:1,x:2100,y:1200,hp:200,isDead:false}});`);assert.equal(host.run('remotePlayers.guest.hp'),80);
  host.run(`spikeMatch.begin();spikeState=spikeMatch.snapshot();spikeApply(spikeState);lastHostSyncAt=0;updateNetwork();`);
  guest.run(`myPlayer.isDead=true;isSpectating=true;handleNetworkData(${host.run('out.at(-1)')})`);
- assert.equal(guest.run('spikeAppliedRound'),2);assert.equal(guest.run('myPlayer.hp'),200);assert.equal(guest.run('isSpectating'),false);assert(guest.run('myPlayer.x<440'));
+ assert.equal(guest.run('spikeAppliedRound'),2);assert.equal(guest.run('myPlayer.hp'),200);assert.equal(guest.run('isSpectating'),false);assert(guest.run('SpikeRules.inside(myPlayer,SpikeRules.SPAWNS[0])'));
 });
 test('unplanted spike and planting progress are private to attackers; planted spike is public',()=>{
  const {p,m}=live();m.actor=p[0].id;m.progress=2;
@@ -59,15 +59,18 @@ test('unplanted spike and planting progress are private to attackers; planted sp
  m.bomb.planted=true;assert.equal(m.snapshot(p[1]).bomb.x,m.bomb.x);
  m.begin();assert.equal(m.snapshot(p[0]).bomb.hidden,true);assert.equal(m.snapshot(p[1]).bomb.carrier,'b');
 });
-test('maze has connected sites/spawns, dead ends, no four-way intersections and clear passages',()=>{
- const {LINKS,WALLS,SITES,SPAWNS}=SpikeRules,adj=Array.from({length:36},()=>[]);
- for(const [a,b] of LINKS){adj[a].push(b);adj[b].push(a);}
- const seen=new Set([0]),queue=[0];while(queue.length)for(const b of adj[queue.shift()])if(!seen.has(b)){seen.add(b);queue.push(b);}
- assert.equal(seen.size,36);assert(adj.every(a=>a.length<=3));assert(adj.some(a=>a.length===1));assert(WALLS.length>16);
- const clear=(x,y)=>WALLS.every(w=>x+18<=w.x||x-18>=w.x+w.w||y+18<=w.y||y-18>=w.y+w.h);
- for(const s of SITES)assert(clear(s.x,s.y));
- for(const r of SPAWNS)for(let x=r.x+20;x<=r.x+r.w-20;x+=20)for(let y=r.y+20;y<=r.y+r.h-20;y+=20)assert(clear(x,y));
- for(const [a,b] of LINKS){const ax=a%6*400+200,ay=Math.floor(a/6)*400+200,bx=b%6*400+200,by=Math.floor(b/6)*400+200;for(let t=0;t<=1;t+=.025)assert(clear(ax+(bx-ax)*t,ay+(by-ay)*t));}
+test('Ascent routes, spawn rooms and both sites are traversable at player radius',()=>{
+ const {WALLS,SITES,SPAWNS,CALLOUTS,SIZE}=SpikeRules;
+ const clear=(x,y)=>WALLS.every(w=>x+25<=w.x||x-25>=w.x+w.w||y+25<=w.y||y-25>=w.y+w.h);
+ const step=15,n=SIZE/step,seen=new Set(),queue=[];
+ const key=(x,y)=>y*n+x;
+ const first={x:Math.round((SPAWNS[0].x+50)/step),y:Math.round((SPAWNS[0].y+50)/step)};
+ seen.add(key(first.x,first.y));queue.push(first);
+ for(let i=0;i<queue.length;i++){const p=queue[i];for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){const x=p.x+dx,y=p.y+dy,k=key(x,y);if(x>0&&y>0&&x<n&&y<n&&!seen.has(k)&&clear(x*step,y*step)){seen.add(k);queue.push({x,y});}}}
+ for(const p of [...SITES,...CALLOUTS,...SPAWNS.map(r=>({x:r.x+r.w/2,y:r.y+r.h/2}))])assert(seen.has(key(Math.round(p.x/step),Math.round(p.y/step))),`unreachable ${p.name||'spawn'}`);
+ for(const r of SPAWNS)for(let x=r.x+25;x<=r.x+r.w-25;x+=15)for(let y=r.y+25;y<=r.y+r.h-25;y+=15)assert(clear(x,y));
+ const p=Array.from({length:24},(_,i)=>({id:'p'+i,teamId:i%2?'team_2':'team_1',hp:200}));new Match(()=>p);for(const a of p)assert(clear(a.x,a.y));
+ assert(WALLS.length<100,'merged geometry stays small for mobile');
 });
 test('host rendering hides preplant marker for defenders and shows it after planting',()=>{
  const h=harness();h.run(`selectedMode='spike';myPlayer.teamId='team_2';spikeState={attackTeam:1,bomb:{x:900,y:900,planted:false}};globalThis.marks=0;globalThis.mapctx={save(){},restore(){},scale(){},fillRect(x,y,w,h){if(w===24&&h===24)marks++},strokeRect(){},fillText(){},beginPath(){},arc(){},fill(){},stroke(){}};drawSpikeMap(mapctx);`);assert.equal(h.run('marks'),0);
@@ -81,4 +84,8 @@ test('actual player and bot movement is halved only in general mode',()=>{
   assert(distances[0]>0);assert.equal(distances[1],distances[0]/2);
  }
  const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';globalThis.testbot={id:'bot_test',x:1200,y:1200};walkBotRoute(testbot,{x:1300,y:1200},3);testbot.x-1200`));assert.equal(distances[1],distances[0]/2);assert(distances[1]>0);
+});
+test('actual bot pathfinder reaches both Ascent sites from both spawns',()=>{
+ const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='1';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();`);
+ for(let spawn=0;spawn<2;spawn++)for(let site=0;site<2;site++)assert(h.run(`(()=>{const r=SpikeRules.SPAWNS[${spawn}];return !!planBotRoute({x:r.x+40,y:r.y+40},SpikeRules.SITES[${site}])})()`),`spawn ${spawn} to site ${site}`);
 });
