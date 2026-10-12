@@ -15,8 +15,8 @@ export function createServer(){const rooms=new Map(),clients=new Map();
  const wss=new WebSocketServer({server,path:'/ws',maxPayload:2048,perMessageDeflate:false});
  const send=(ws,data)=>{if(ws.readyState===WebSocket.OPEN&&ws.bufferedAmount<262144)ws.send(JSON.stringify(data));};
  function leave(c){if(c.room){c.room.remove(c.id);if(!c.room.humans().length)rooms.delete(c.room.code);}c.room=null;}
- wss.on('connection',ws=>{if(clients.size>=200){ws.close(1013,'Server full');return;}const c={id:randomBytes(12).toString('hex'),ws,room:null,last:Date.now(),window:Date.now(),count:0};clients.set(c.id,c);send(ws,{type:'hello',id:c.id});
- ws.on('message',raw=>{try{const now=Date.now();if(now-c.window>1000){c.window=now;c.count=0;}if(++c.count>100)return;c.last=now;const m=JSON.parse(raw.toString());if(!m||typeof m!=='object')return;
+ wss.on('connection',ws=>{if(clients.size>=200){ws.close(1013,'Server full');return;}ws._socket?.setNoDelay(true);const c={id:randomBytes(12).toString('hex'),ws,room:null,last:Date.now(),window:Date.now(),count:0};clients.set(c.id,c);send(ws,{type:'hello',id:c.id});
+ ws.on('message',raw=>{try{const now=Date.now();if(now-c.window>1000){c.window=now;c.count=0;}if(++c.count>150)return;c.last=now;const m=JSON.parse(raw.toString());if(!m||typeof m!=='object')return;
  const room=c.room,p=room?.players.get(c.id);
  if(m.type==='ping'){send(ws,{type:'pong',t:m.t});return;}
  if(m.type==='leave'){leave(c);send(ws,{type:'left'});return;}
@@ -30,7 +30,7 @@ export function createServer(){const rooms=new Map(),clients=new Map();
  if(m.type==='input'){p.input={x:Number.isFinite(m.x)?Math.max(-1,Math.min(1,m.x)):0,y:Number.isFinite(m.y)?Math.max(-1,Math.min(1,m.y)):0,angle:Number.isFinite(m.angle)?m.angle:p.angle,fire:!!m.fire,walk:!!m.walk,interact:!!m.interact};p.inputAt=now;}
  if(m.type==='start'&&!room.start(c.id))send(ws,{type:'error',message:'양 팀에 한 명 이상 필요합니다. 팀을 바꾸거나 봇을 추가해 주세요.'});
  if(m.type==='buy'&&!room.buy(p,m.item))send(ws,{type:'error',message:'구매 시간과 크레딧을 확인해 주세요.'});
- if(m.type==='reload')room.reload(p);if(m.type==='switch')room.switchWeapon(p);if(m.type==='skill')room.ability(p);if(m.type==='drop')room.dropBomb(p);
+ if(m.type==='reload')room.reload(p);if(m.type==='switch')room.switchWeapon(p);if(m.type==='drop')room.dropBomb(p);
  if(m.type==='team'&&room.phase==='lobby')p.team=1-p.team;
  if(m.type==='bot'&&room.host===c.id&&room.phase==='lobby'&&room.players.size<20)room.addBot(m.team===1?1:0);
  if(m.type==='removeBots'&&room.host===c.id&&room.phase==='lobby'){for(const q of room.players.values())if(q.bot)room.remove(q.id);room.fillBots=false;}
@@ -39,7 +39,8 @@ export function createServer(){const rooms=new Map(),clients=new Map();
  let last=performance.now(),frame=0;const timer=setInterval(()=>{const now=performance.now(),dt=Math.min(.08,(now-last)/1000);last=now;
  for(const c of clients.values()){if(Date.now()-c.last>20000){c.ws.terminate();continue;}const p=c.room?.players.get(c.id);if(p&&Date.now()-(p.inputAt||0)>350)p.input={};}
  for(const r of rooms.values())r.tick(dt);
- if(++frame%2===0)for(const c of clients.values())if(c.room)send(c.ws,c.room.snapshot(c.id));
+ // Combat snapshots: 30 Hz. Lobby: 5 Hz, avoiding idle serialization.
+ frame++;for(const c of clients.values())if(c.room&&(c.room.phase!=='lobby'||frame%6===0))send(c.ws,c.room.snapshot(c.id));
  },1000/30);
  const close=()=>{clearInterval(timer);for(const c of clients.values())c.ws.terminate();wss.close();return new Promise(resolve=>server.close(resolve));};return{server,rooms,close};
 }

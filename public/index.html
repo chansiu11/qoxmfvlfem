@@ -1,21 +1,51 @@
-<!doctype html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="theme-color" content="#11191e"><title>BREACH — 탑다운 택티컬 슈터</title><link rel="stylesheet" href="style.css"></head>
+<!doctype html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="theme-color" content="#11191e"><title>BREACH — 탑다운 택티컬 슈터</title><link rel="stylesheet" href="style.css?v=20261012b"></head>
 <body>
 <canvas id="game"></canvas><div id="vignette"></div>
 <main id="home">
  <header class="topbar"><a class="brand" href="./"><span class="brandmark">B</span> BREACH<span class="tiny">TACTICAL / 2D</span></a><span id="connection" class="status">● 서버 연결 중</span></header>
- <section class="hero"><div class="eyebrow"><span></span> OPERATION 01 / BLACKSITE</div><h1>한 발의 선택.<br><em>팀의 승리.</em></h1><p class="intro">위에서 보는 전장, 끝까지 이어지는 긴장감.<br>팀을 꾸리고, 코어를 설치하고, 작전을 완수하세요.</p><div class="tags"><span>실시간 팀 대전</span><span>PC + 모바일</span><span>1인부터 시작</span></div>
- <div class="loadout"><label class="field-label" for="nickname">CALLSIGN / 닉네임</label><input id="nickname" maxlength="16" placeholder="요원 이름 입력" value="요원"><div class="field-label agentlabel">SELECT AGENT / 요원 선택</div><div id="agents"></div></div>
- <div class="actions"><button id="random" class="primary"><span>랜덤 매치</span><span>↗</span></button><button id="private" class="outline">사설방 만들기</button><button id="joinOpen" class="textbutton">코드로 입장 →</button></div><p class="subtle">정해진 5대5 없이 자유롭게 · 부족한 팀은 봇과 함께</p>
+ <div class="lobby-grid" aria-hidden="true"></div>
+ <section class="hero">
+  <div class="eyebrow">TACTICAL OPERATIONS / 01</div>
+  <h1>BREACH<span>作戦開始 / 작전 준비</span></h1>
+  <div class="modecard"><span class="mode-number">01</span><div><b>코어 탈취</b><small>공격 · 수비 / 라운드 기반 팀 전투</small></div><span class="mode-live">LIVE</span></div>
+  <div class="actions"><button id="random" class="primary"><span><small>FIND MATCH</small>전투 시작</span><span>↗</span></button><button id="private" class="outline">사설 작전실 <span>＋</span></button><button id="joinOpen" class="outline">코드로 합류 <span>→</span></button></div>
+  <div class="operation-note"><span class="live-dot"></span> BLACKSITE <small>폭파 임무 · A / B 거점</small></div>
  </section>
- <aside class="maplabel"><span class="live-dot"></span> BLACKSITE <small>두 개의 거점. 하나의 목표.</small></aside>
- <footer class="homefooter"><span>01 — BUY. BREACH. DEFEND.</span><button id="helpOpen" class="textbutton">조작 & 게임 규칙 ↗</button></footer>
+ <div class="operator-stage" aria-hidden="true">
+  <div class="operator-halo"></div><span class="operator-index">AGENT / <b id="agentIndex">01</b></span>
+  <svg class="operator-art" viewBox="0 0 420 620" fill="none">
+   <ellipse cx="213" cy="591" rx="138" ry="15" fill="#000" opacity=".6"/>
+   <path d="M158 339L213 345 200 451 185 568 139 568 146 447Z" fill="#17252e" stroke="#4b616a" stroke-width="2"/>
+   <path d="M219 344L269 335 277 445 306 559 261 574 225 459Z" fill="#24333c" stroke="#566972" stroke-width="2"/>
+   <path d="M144 556L182 558 193 584 129 588 123 579Z M263 559L302 548 326 576 321 587 260 586Z" fill="#0a1118" stroke="#536773" stroke-width="2"/>
+   <path d="M141 423L185 430 181 460 141 454Z M242 420L278 415 285 450 247 457Z" fill="#0b1720" stroke="#556b75"/>
+   <path d="M152 157L186 141 237 142 277 164 283 259 266 356 151 350 136 247Z" fill="#22343e" stroke="#66818b" stroke-width="2"/>
+   <path d="M168 158L250 157 268 190 254 268 169 271 150 192Z" fill="#101e28" stroke="#435e69" stroke-width="3"/>
+   <path d="M171 171L246 170 253 194 166 194Z" fill="var(--agent-color)" opacity=".8"/>
+   <path d="M176 202H248V244H176Z" fill="#2e424c"/><path d="M188 206V239M205 206V239M222 206V239M239 206V239" stroke="#789099" stroke-width="3"/>
+   <path d="M153 277L266 277 262 305 154 306Z" fill="#090f18"/><path d="M159 288H183V317H159ZM194 288H218V317H194ZM231 288H255V317H231Z" fill="#40515b" stroke="#75868a"/>
+   <path d="M146 163L123 164 101 216 91 276 119 305 148 285 132 268 151 225Z" fill="#273d47" stroke="#6b828a" stroke-width="2"/>
+   <path d="M274 166L295 179 315 248 289 287 240 267 252 237 279 243 266 211Z" fill="#30444d" stroke="#6b828a" stroke-width="2"/>
+   <path d="M113 179L139 174 141 203 105 214Z M273 177L294 188 302 212 275 207Z" fill="var(--agent-color)" opacity=".65"/>
+   <path d="M188 129L190 156 215 170 238 147 234 123Z" fill="#101c25"/>
+   <path d="M180 70L205 52 232 57 251 79 247 119 228 143 200 139 179 113Z" fill="#344b55" stroke="#78939a" stroke-width="2"/>
+   <path d="M182 82L240 76 248 92 241 105 187 112 177 100Z" fill="#07131c"/><path d="M186 90L239 84 239 96 188 102Z" fill="var(--agent-color)"/>
+   <path d="M198 117L232 111 228 131 207 134Z" fill="#0b1822"/>
+   <path d="M184 67L207 58 230 62 236 72 185 78Z" fill="#536973"/>
+   <g transform="rotate(-24 205 267)"><path d="M92 250H139V238H259V247H337V260H262L246 279H195L184 312H164L171 276H134L111 289H92Z" fill="#09141c" stroke="#83959c" stroke-width="2"/><path d="M196 279H227L235 311H204Z" fill="#263944"/><path d="M164 241H243V249H164Z" fill="#405762"/><path d="M257 250H326" stroke="var(--agent-color)" stroke-width="3"/><path d="M191 234V222H223V236" stroke="#6e8690" stroke-width="5"/></g>
+   <path d="M118 268L143 255 158 273 139 291 120 290Z M244 250L266 255 267 275 243 279 232 265Z" fill="#53626a" stroke="#9bacae"/>
+  </svg>
+  <div class="operator-caption"><small>STANDARD OPERATOR</small><b id="operatorName">브리처</b><span id="operatorRole">기본 전투원</span></div>
+ </div>
+ <aside class="loadout"><div class="profile-strip"><span class="profile-icon">B</span><div><label class="field-label" for="nickname">CALLSIGN</label><input id="nickname" maxlength="16" placeholder="요원 이름" value="요원"></div><span class="ready-tag">READY</span></div><div class="fixed-operator"><small>STANDARD OPERATOR</small><b>브리처</b><p>모든 플레이어가 같은 캐릭터로 전투합니다.</p><span>총기 · 이동 · 팀워크</span></div></aside>
+ <footer class="homefooter"><span>BLACKSITE / TACTICAL COMMAND</span><div><button id="fullscreen" class="textbutton">⛶ 전체 화면</button><button id="helpOpen" class="textbutton">조작 안내</button></div></footer>
 </main>
 <div id="hud" hidden>
  <div class="hudtop"><button id="leave" class="iconbutton" aria-label="방 나가기">←</button><div class="roundhud"><span id="scoreLeft">0</span><div><small id="roundLabel">ROUND 01</small><b id="timer">00:20</b></div><span id="scoreRight">0</span></div><button id="scoreToggle" class="iconbutton">명단</button></div>
  <div id="phaseBanner"><small id="sideLabel"></small><strong id="phaseTitle"></strong><span id="phaseDesc"></span></div><div id="killfeed"></div>
  <div id="objective"></div><div id="progress" hidden><span></span><label></label></div>
- <div class="hudbottom"><div class="health"><small>HEALTH / ARMOR</small><b id="hp">100 <i>+ 0</i></b><div><span id="hpbar"></span></div></div><div class="ability"><button id="skillButton">Q</button><span id="skillText">연막</span></div><div class="ammo"><small id="weaponName">P12</small><b id="ammo">12 <i>/ 48</i></b></div></div>
- <div id="desktopHint">WASD 이동 · 마우스 조준/사격 · R 재장전 · Q 스킬 · E 설치/해체 · B 구매 · 1/2 무기</div><div id="ping">-- ms</div>
+ <div class="hudbottom"><div class="health"><small>HEALTH / ARMOR</small><b id="hp">100 <i>+ 0</i></b><div><span id="hpbar"></span></div></div><div class="ammo"><small id="weaponName">P12</small><b id="ammo">12 <i>/ 48</i></b></div></div>
+ <div id="desktopHint">WASD 이동 · 마우스 조준/사격 · R 재장전 · E 설치/해체 · B 구매 · 1/2 무기</div><div id="ping">-- ms</div>
  <button id="shopOpen" class="shopbutton">B / 무기 구매 <span id="credits">800</span></button>
 </div>
 <section id="lobby" class="panel overlay" hidden><div class="eyebrow">MISSION BRIEFING</div><h2 id="roomTitle">작전 대기실</h2><p>방 코드 <button id="copyCode" class="code"></button><span id="waitLabel"></span></p><div class="teams"><div><h3 class="teal">청록 팀</h3><div id="team0"></div><button data-bot="0" class="outline hostonly">+ 봇 추가</button></div><div><h3 class="coral">코랄 팀</h3><div id="team1"></div><button data-bot="1" class="outline hostonly">+ 봇 추가</button></div></div><div class="row"><button id="teamSwitch" class="outline">팀 변경</button><button id="removeBots" class="textbutton hostonly">봇 제거</button><button id="start" class="primary hostonly">작전 시작 →</button></div><p class="subtle">1명도 시작 가능 · 한 방 최대 20명 · 빈 팀 자동 봇 충원</p></section>
@@ -23,6 +53,6 @@
 <section id="scoreboard" class="panel overlay" hidden><div class="row between"><h2>전투 기록</h2><button data-close="scoreboard" class="iconbutton">✕</button></div><div id="scoreRows"></div></section>
 <dialog id="joinDialog" class="panel"><div class="row between"><h2>작전실 입장</h2><button data-dialog-close="joinDialog" class="iconbutton">✕</button></div><label class="field-label" for="roomCode">6자리 방 코드</label><input id="roomCode" maxlength="6" placeholder="예: A1B2C3" autocomplete="off"><button id="join" class="primary">입장하기 →</button></dialog>
 <dialog id="privateDialog" class="panel"><div class="row between"><h2>사설 작전실</h2><button data-dialog-close="privateDialog" class="iconbutton">✕</button></div><label class="field-label" for="roomName">방 이름</label><input id="roomName" maxlength="24" value="친구들과 작전실"><label class="checkbox"><input type="checkbox" id="bots" checked> 빈 팀에 봇 자동 추가 (혼자 플레이 가능)</label><button id="create" class="primary">방 만들기 →</button></dialog>
-<dialog id="help" class="panel"><div class="row between"><h2>작전 매뉴얼</h2><button data-dialog-close="help" class="iconbutton">✕</button></div><p><b>공격팀</b>은 A 또는 B 거점에서 코어를 설치하고, <b>수비팀</b>은 이를 저지하거나 해체합니다. 사망하면 다음 라운드까지 팀원을 관전합니다.</p><div class="rules"><div><b>20초</b><span>준비 & 구매</span></div><div><b>100초</b><span>전투 시간</span></div><div><b>3초 / 7초</b><span>설치 / 해체</span></div><div><b>40초</b><span>설치 후 폭발</span></div></div><p>13라운드를 먼저 이기면 승리합니다. 12라운드 후 공수를 교대하며, 12:12부터는 매 라운드 공수를 바꾸고 2점 차가 날 때까지 연장합니다.</p><p>PC: WASD 이동 · 마우스 조준/사격 · Shift 걷기 · R 재장전 · Q 고유 스킬 · E 설치/해체(길게) · G 코어 내려놓기 · 1/2 무기 전환 · B 구매 · Tab 기록</p><p>모바일: 왼쪽 패드 이동 · 오른쪽 패드 방향 조준 및 사격 · 각 기능 버튼 사용. 가로 화면을 권장합니다.</p><p class="subtle">적은 벽과 연막 뒤에서 보이지 않습니다. 아군 피해는 없습니다. 각 요원 스킬은 매 라운드 1회입니다. 방은 서버 메모리에 유지되며 서버 재시작 시 종료됩니다.</p></dialog>
-<div id="touchControls" hidden><div id="movePad" class="pad"><div></div><span>이동</span></div><div id="aimPad" class="pad aim"><div></div><span>조준 / 사격</span></div><div class="touchbuttons"><button id="touchReload">재장전</button><button id="touchSwitch">무기</button><button id="touchSkill">스킬</button><button id="touchInteract">설치/해체</button><button id="touchDrop">코어↓</button></div></div>
-<div id="toast" role="status"></div><script type="module" src="client.js"></script></body></html>
+<dialog id="help" class="panel"><div class="row between"><h2>작전 매뉴얼</h2><button data-dialog-close="help" class="iconbutton">✕</button></div><p><b>공격팀</b>은 A 또는 B 거점에서 코어를 설치하고, <b>수비팀</b>은 이를 저지하거나 해체합니다. 사망하면 다음 라운드까지 팀원을 관전합니다.</p><div class="rules"><div><b>20초</b><span>준비 & 구매</span></div><div><b>100초</b><span>전투 시간</span></div><div><b>3초 / 7초</b><span>설치 / 해체</span></div><div><b>40초</b><span>설치 후 폭발</span></div></div><p>13라운드를 먼저 이기면 승리합니다. 12라운드 후 공수를 교대하며, 12:12부터는 매 라운드 공수를 바꾸고 2점 차가 날 때까지 연장합니다.</p><p>PC: WASD 이동 · 마우스 조준/사격 · Shift 걷기 · R 재장전 · E 설치/해체(길게) · G 코어 내려놓기 · 1/2 무기 전환 · B 구매 · Tab 기록</p><p>모바일: 왼쪽 패드 이동 · 오른쪽 패드 방향 조준 및 사격 · 각 기능 버튼 사용. 가로 화면을 권장합니다.</p><p class="subtle">적은 벽 뒤에서 보이지 않습니다. 아군 피해는 없습니다. 방은 서버 메모리에 유지되며 서버 재시작 시 종료됩니다.</p></dialog>
+<div id="touchControls" hidden><div id="movePad" class="pad"><div></div><span>이동</span></div><div id="aimPad" class="pad aim"><div></div><span>조준 / 사격</span></div><div class="touchbuttons"><button id="touchReload">재장전</button><button id="touchSwitch">무기</button><button id="touchInteract">설치/해체</button><button id="touchDrop">코어↓</button></div></div>
+<div id="toast" role="status"></div><script type="module" src="client.js?v=20261012b"></script></body></html>

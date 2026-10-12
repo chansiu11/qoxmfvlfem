@@ -18,7 +18,6 @@ export const WEAPONS={
  sniper:{name:'LONGSHOT',label:'저격소총',price:4700,damage:145,delay:1.25,mag:5,reload:2.8,range:1500,spread:.006,speed:185},
  shotgun:{name:'BREAKER',label:'산탄총',price:1800,damage:16,delay:.8,mag:6,reload:2.4,range:420,spread:.20,pellets:8,speed:210}
 };
-export const AGENTS={ghost:{name:'고스트',role:'시야 차단',skill:'연막',key:'Q',color:'#75ded9'},rush:{name:'러시',role:'빠른 진입',skill:'전방 대쉬',key:'Q',color:'#ff785f'},medic:{name:'메딕',role:'생존 지원',skill:'자가 회복',key:'Q',color:'#b2d984'}};
 export const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 export const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
 export function blocked(x,y,r=17){return WALLS.some(([a,b,w,h])=>x+r>a&&x-r<a+w&&y+r>b&&y-r<b+h);}

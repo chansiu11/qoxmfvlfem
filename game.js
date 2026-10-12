@@ -1,18 +1,18 @@
 import {randomBytes} from 'node:crypto';
-import {WORLD,WALLS,SITES,SPAWNS,WEAPONS,AGENTS,clamp,dist,blocked,rayWall,visible,pathTo} from './public/shared.js';
+import {WORLD,WALLS,SITES,SPAWNS,WEAPONS,clamp,dist,blocked,rayWall,visible,pathTo} from './public/shared.js';
 export class Room{
  constructor({mode='private',name='작전실',bots=true}={}){this.code=randomBytes(3).toString('hex').toUpperCase();this.mode=mode;this.name=name;this.fillBots=bots;this.players=new Map();this.host=null;this.phase='lobby';this.time=0;this.round=0;this.score=[0,0];this.attack=0;this.smokes=[];this.traces=[];this.feed=[];this.bomb=null;this.result='';this.botCount=0;this.clock=0;}
- add(id,name,agent='ghost',bot=false){const counts=[0,0];for(const p of this.players.values())counts[p.team]++;const team=counts[0]<=counts[1]?0:1;
- const p={id,name:String(name||'요원').slice(0,16),agent:Object.hasOwn(AGENTS,agent)?agent:'ghost',bot,team,x:SPAWNS[team].x,y:SPAWNS[team].y,angle:team?Math.PI:0,hp:100,armor:0,money:800,kills:0,deaths:0,alive:this.phase==='lobby',weapon:'pistol',primary:null,ammo:{pistol:12},reserve:{pistol:48},cooldown:0,reloading:0,skill:1,input:{},interact:0,nav:[],navAt:0,shotAt:0,losses:0};this.players.set(id,p);if(!bot&&!this.host)this.host=id;return p;}
+ add(id,name,agent='breacher',bot=false){const counts=[0,0];for(const p of this.players.values())counts[p.team]++;const team=counts[0]<=counts[1]?0:1;
+ const p={id,name:String(name||'요원').slice(0,16),agent:'breacher',bot,team,x:SPAWNS[team].x,y:SPAWNS[team].y,angle:team?Math.PI:0,hp:100,armor:0,money:800,kills:0,deaths:0,alive:this.phase==='lobby',weapon:'pistol',primary:null,ammo:{pistol:12},reserve:{pistol:48},cooldown:0,reloading:0,input:{},interact:0,nav:[],navAt:0,shotAt:0,losses:0};this.players.set(id,p);if(!bot&&!this.host)this.host=id;return p;}
  remove(id){const p=this.players.get(id);if(!p)return;this.dropBomb(p);this.players.delete(id);if(this.host===id)this.host=[...this.players.values()].find(x=>!x.bot)?.id||null;}
  humans(){return [...this.players.values()].filter(p=>!p.bot);}
  balanceBots(){if(!this.fillBots)return;for(let team=0;team<2;team++){if(![...this.players.values()].some(p=>p.team===team))this.addBot(team);}}
- addBot(team){const p=this.add('bot-'+(++this.botCount),'BOT '+this.botCount,['rush','ghost','medic'][this.botCount%3],true);p.team=team;return p;}
+ addBot(team){const p=this.add('bot-'+(++this.botCount),'BOT '+this.botCount,'breacher',true);p.team=team;return p;}
  start(id){if(this.phase!=='lobby'||(this.mode==='private'&&id!==this.host))return false;this.balanceBots();if(![0,1].every(t=>[...this.players.values()].some(p=>p.team===t)))return false;this.newRound();return true;}
  newRound(){this.round++;if(this.round===13||this.round>24){this.attack=1-this.attack;if(this.round===13)for(const p of this.players.values()){p.money=800;p.primary=null;p.armor=0;p.losses=0;}}
  if(this.round>24)for(const p of this.players.values())p.money=5000;
  this.phase='buy';this.time=20;this.result='';this.smokes=[];this.traces=[];this.bomb=null;this.balanceBots();const indexes=[0,0];
- for(const p of this.players.values()){const i=indexes[p.team]++,s=SPAWNS[p.team===this.attack?0:1];p.x=s.x+(Math.floor(i/5)%3)*38*(p.team===this.attack?1:-1);p.y=s.y+(i%5-2)*40;p.hp=100;p.alive=true;p.skill=1;p.angle=p.team===this.attack?0:Math.PI;p.input={};p.cooldown=0;p.reloading=0;p.interact=0;p.nav=[];p.navAt=0;p.weapon=p.primary||'pistol';p.ammo={pistol:12};p.reserve={pistol:48};if(p.primary){p.ammo[p.primary]=WEAPONS[p.primary].mag;p.reserve[p.primary]=WEAPONS[p.primary].mag*3;}
+ for(const p of this.players.values()){const i=indexes[p.team]++,s=SPAWNS[p.team===this.attack?0:1];p.x=s.x+(Math.floor(i/5)%3)*38*(p.team===this.attack?1:-1);p.y=s.y+(i%5-2)*40;p.hp=100;p.alive=true;p.angle=p.team===this.attack?0:Math.PI;p.input={};p.cooldown=0;p.reloading=0;p.interact=0;p.nav=[];p.navAt=0;p.weapon=p.primary||'pistol';p.ammo={pistol:12};p.reserve={pistol:48};if(p.primary){p.ammo[p.primary]=WEAPONS[p.primary].mag;p.reserve[p.primary]=WEAPONS[p.primary].mag*3;}
  if(p.bot){this.buy(p,p.money>=2900?'rifle':'smg');this.buy(p,'armor');}}
  const carrier=[...this.players.values()].find(p=>p.team===this.attack&&!p.bot)||[...this.players.values()].find(p=>p.team===this.attack);this.bomb={carrier:carrier?.id,x:carrier?.x||140,y:carrier?.y||600,planted:false,timer:40,site:null};}
  buy(p,item){if(this.phase!=='buy'||!p.alive)return false;
@@ -21,11 +21,6 @@ export class Room{
  dropBomb(p){if(this.bomb?.carrier===p.id){this.bomb.carrier=null;this.bomb.x=p.x;this.bomb.y=p.y;}}
  reload(p){if(!p.alive||p.reloading||p.ammo[p.weapon]>=WEAPONS[p.weapon].mag||!p.reserve[p.weapon])return;p.reloading=WEAPONS[p.weapon].reload;}
  switchWeapon(p){if(!p.primary)return;p.weapon=p.weapon==='pistol'?p.primary:'pistol';p.reloading=0;p.cooldown=Math.max(p.cooldown,.2);}
- ability(p){if(this.phase!=='live'||!p.alive||!p.skill)return;
- if(p.agent==='medic'){if(p.hp>=100)return;p.hp=Math.min(100,p.hp+45);}
- if(p.agent==='rush'){const dx=Math.cos(p.angle),dy=Math.sin(p.angle);for(let i=0;i<22;i++){if(blocked(p.x+dx*10,p.y+dy*10))break;p.x+=dx*10;p.y+=dy*10;}}
- if(p.agent==='ghost'){const dx=Math.cos(p.angle),dy=Math.sin(p.angle),d=Math.max(0,rayWall(p.x,p.y,dx,dy,270)-25);this.smokes.push({x:p.x+dx*d,y:p.y+dy*d,r:105,time:12});}
- p.skill--;p.interact=0;}
  kill(victim,killer){if(!victim.alive)return;victim.alive=false;victim.hp=0;victim.deaths++;victim.primary=null;victim.armor=0;victim.input={};this.dropBomb(victim);if(killer){killer.kills++;killer.money=Math.min(9000,killer.money+200);this.feed.unshift({killer:killer.name,victim:victim.name,weapon:killer.weapon,time:7});this.feed=this.feed.slice(0,5);}}
  damage(p,amount,killer){const absorb=Math.min(p.armor,amount*.66);p.armor-=absorb;p.hp-=amount-absorb;if(p.hp<=0)this.kill(p,killer);}
  fire(p){if(!p.alive||this.phase!=='live'||p.cooldown>0||p.reloading)return;if(!p.ammo[p.weapon]){this.reload(p);return;}const w=WEAPONS[p.weapon];p.ammo[p.weapon]--;p.cooldown=w.delay;p.shotAt=this.clock;
@@ -37,7 +32,7 @@ export class Room{
  if(this.score[team]>=13&&Math.abs(this.score[0]-this.score[1])>=2){this.phase='match';this.time=18;this.result=`${team===0?'청록':'코랄'} 팀 최종 승리`;}}
  botInput(p,dt){if(this.phase!=='live'||!p.alive){p.input={};return;}
  let enemy=[...this.players.values()].filter(q=>q.alive&&q.team!==p.team&&dist(p,q)<850&&visible(p,q,this.smokes)).sort((a,b)=>dist(p,a)-dist(p,b))[0];
- if(enemy){p.angle=Math.atan2(enemy.y-p.y,enemy.x-p.x)+(Math.sin(this.clock*3+p.x)*.045);p.input={x:0,y:0,fire:true,angle:p.angle};if(!p.ammo[p.weapon])this.reload(p);if(p.hp<50&&p.agent==='medic')this.ability(p);return;}
+ if(enemy){p.angle=Math.atan2(enemy.y-p.y,enemy.x-p.x)+(Math.sin(this.clock*3+p.x)*.045);p.input={x:0,y:0,fire:true,angle:p.angle};if(!p.ammo[p.weapon])this.reload(p);return;}
  let target;const b=this.bomb;
  if(p.team===this.attack){if(b.planted)target={x:b.x-140,y:b.y+80};else if(b.carrier===p.id)target=SITES[this.round%2];else if(!b.carrier)target=b;else target=this.players.get(b.carrier)||SITES[0];}
  else if(b.planted)target=b;else target=SITES[(this.round+Number(p.id.split('-')[1]||0))%2];
