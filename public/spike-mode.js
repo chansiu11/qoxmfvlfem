@@ -1,4 +1,5 @@
 /* Adapter for the existing P2P game. Other modes retain their original behavior. */
+let spikeFrameDt=1/60;
 let spikeMatch=null,spikeState=null,spikeHeld=false,spikeLastTick=performance.now(),spikeAppliedRound=0;
 const spikeActors=()=>[...roomHumans(),...aiBots].filter(p=>!isAssignedSpectator(p.id));
 const spikeSpawn=p=>SpikeRules.SPAWNS[p.teamId===`team_${spikeState?.attackTeam||1}`?0:1];
@@ -93,6 +94,7 @@ const originalUpdateAI=updateAI;
 updateAI=()=>{
  if(selectedMode!=='spike')return originalUpdateAI();
  if(!isHost||!['live','planted'].includes(spikeState?.phase))return;
+ for(const bot of aiBots)bot._spikeMoveBudget=SpikeRules.movementDistance(spikeFrameDt);
  originalUpdateAI();
  // Idle bots pursue the objective; combat AI retains priority when enemies are visible.
  const b=spikeMatch.bomb;
@@ -110,7 +112,7 @@ updateAI=()=>{
 const originalUpdate=update;
 update=()=>{
  if(selectedMode!=='spike'||!gameStarted||gameEnded)return originalUpdate();
- const now=performance.now(),dt=Math.min(.1,(now-spikeLastTick)/1000);spikeLastTick=now;
+ const now=performance.now(),dt=Math.min(.1,(now-spikeLastTick)/1000);spikeLastTick=now;spikeFrameDt=Math.max(0,Math.min(.05,dt));
  myPlayer._spikeUse=spikeHeld;
  if(spikeState?.phase==='prep'||['end','finished'].includes(spikeState?.phase)||spikeHeld)myPlayer.isShooting=false;
  originalUpdate();

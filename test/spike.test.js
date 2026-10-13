@@ -33,7 +33,7 @@ function harness(){
 test('actual packed game starts objective match; other map modes and original mobile controls remain',()=>{
  const h=harness();assert(h.html.includes('value="spike"'));assert(!h.html.includes('id="btnFire"'));
  h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='1';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();`);
- assert.equal(h.run('gameStarted'),true);assert.equal(h.run('WORLD_SIZE'),3600);assert.equal(h.run('spikeMatch.phase'),'prep');assert.equal(h.run('spikeActors().length'),2);
+ assert.equal(h.run('gameStarted'),true);assert.equal(h.run('WORLD_SIZE'),4800);assert.equal(h.run('spikeMatch.phase'),'prep');assert.equal(h.run('spikeActors().length'),2);
  h.run(`spikeChoose('sniper')`);assert.equal(h.run('myPlayer.weapon'),'sniper');
  assert.equal(h.run(`generateMapData('normal',123).worldSize`),2400);assert(h.run(`generateMapData('br',123).obstacles.some(o=>o.type==='house')`));
  h.run(`spikeMatch.time=0;spikeMatch.tick(.05);spikeState=spikeMatch.snapshot();handleNetworkData({type:'SPIKE_WEAPON',player:{id:myPlayer.id},weapon:'ar'});`);assert.equal(h.run('myPlayer.weapon'),'sniper');
@@ -77,14 +77,19 @@ test('host rendering hides preplant marker for defenders and shows it after plan
  const h=harness();h.run(`selectedMode='spike';myPlayer.teamId='team_2';spikeState={attackTeam:1,bomb:{x:900,y:900,planted:false}};globalThis.marks=0;globalThis.mapctx={save(){},restore(){},scale(){},fillRect(x,y,w,h){if(w===24&&h===24)marks++},strokeRect(){},fillText(){},beginPath(){},arc(){},fill(){},stroke(){}};drawSpikeMap(mapctx);`);assert.equal(h.run('marks'),0);
  h.run(`spikeState.bomb.planted=true;drawSpikeMap(mapctx)`);assert.equal(h.run('marks'),1);
 });
-test('general-mode movement scales with enlarged map and still disables sprint',()=>{
- const h=harness();h.run(`gameStarted=true;gameEnded=false;isHost=false;isMobile=false;obstacles=[];keys['d']=true;updateAI=()=>{};updateNetwork=()=>{};myPlayer.isDead=false;myPlayer.hp=200;`);
- for(const stance of ['walk','sprint','stealth']){
-  h.run(`keys['shift']=${stance==='sprint'};keys['control']=${stance==='stealth'};`);
-  const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';myPlayer.x=1200;myPlayer.y=1200;originalUpdate();myPlayer.x-1200`));
-  assert(distances[0]>0);assert.equal(distances[1],stance==='sprint'?2.25:distances[0]*.75);
+test('general movement is time based at 30/60/120 FPS, with no sprint or diagonal bonus',()=>{
+ const h=harness();h.run(`gameStarted=true;gameEnded=false;isHost=false;isMobile=false;obstacles=[];keys['d']=true;updateAI=()=>{};updateNetwork=()=>{};myPlayer.isDead=false;myPlayer.hp=200;selectedMode='spike';`);
+ for(const fps of [30,60,120])for(const stance of ['walk','sprint','stealth'])for(const diagonal of [false,true]){
+  const distance=h.run(`(()=>{spikeFrameDt=1/${fps};keys['shift']=${stance==='sprint'};keys['control']=${stance==='stealth'};keys['w']=${diagonal};myPlayer.x=1200;myPlayer.y=1200;for(let i=0;i<${fps};i++)originalUpdate();return Math.hypot(myPlayer.x-1200,myPlayer.y-1200)})()`);
+  assert(Math.abs(distance-(stance==='stealth'?129.6:216))<1e-6,`${fps} FPS ${stance}`);
  }
- const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';globalThis.testbot={id:'bot_test',x:1200,y:1200};walkBotRoute(testbot,{x:1300,y:1200},3);testbot.x-1200`));assert.equal(distances[1],distances[0]*.75);assert(distances[1]>0);
+ h.run(`selectedMode='normal';keys['control']=false;keys['shift']=false;keys['w']=false;myPlayer.x=1200;originalUpdate()`);assert.equal(h.run('myPlayer.x'),1203);
+ for(const fps of [30,60,120]){
+  const distance=h.run(`(()=>{selectedMode='spike';spikeFrameDt=1/${fps};const b={id:'bot_test',x:1200,y:1200};for(let i=0;i<${fps};i++){b._spikeMoveBudget=SpikeRules.movementDistance(spikeFrameDt);walkBotRoute(b,{x:2200,y:1200},3);walkBotRoute(b,{x:2200,y:1200},1.5);}return b.x-1200})()`);
+  assert(Math.abs(distance-216)<1e-6,'bot combat and objective share one movement budget');
+ }
+ assert.equal(SpikeRules.SIZE/SpikeRules.UNITS_PER_METER,120);
+ assert.equal(SpikeRules.movementDistance(5),10.8,'tab resume cannot teleport');
 });
 test('actual bot pathfinder reaches both Ascent sites from both spawns',()=>{
  const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='1';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();`);
@@ -133,4 +138,15 @@ test('objective HUD shows timed plant progress and saved half-defuse without rev
  h.run(`spikeState.phase='planted';spikeState.actor=null;spikeState.progress=3.5;spikeState.bomb={planted:true,x:myPlayer.x,y:myPlayer.y,defuseCheckpoint:3.5};updateSpikeAction();`);
  assert.equal(h.run('spikeAction.style.display'),'block');assert.equal(h.run("document.getElementById('spikeActionFill').style.width"),'50%');assert.equal(h.run("document.getElementById('spikeActionTime').textContent"),'3.5초');assert(h.run("document.getElementById('spikeActionSaved').textContent.includes('50% 저장')"));
  h.run(`spikeState.phase='end';updateSpikeAction()`);assert.equal(h.run('spikeAction.style.display'),'none');
+});
+
+test('aim dots stop at the first wall and move forward only while locally aiming',()=>{
+ const h=harness();h.run(`gameStarted=true;gameEnded=false;isSpectating=false;isRespawning=false;myPlayer.x=100;myPlayer.y=100;myPlayer.angle=0;myPlayer.hp=200;myPlayer.isDead=false;myPlayer.isDowned=false;myPlayer.weapon='ar';myPlayer.isAiming=true;obstacles=[{x:220,y:50,w:10,h:100},{x:350,y:50,w:10,h:100}];nearbyObstacles=()=>obstacles;globalThis.dots=[];ctx.arc=(x,y,r)=>dots.push({x,y,r});drawAimGuide(0);`);
+ assert.equal(h.run('aimGuideLength(myPlayer,1000)'),118);
+ const first=h.run('dots[0].x');assert(h.run('dots.length>0&&dots.every(p=>p.x+p.r<220)'));
+ h.run('dots=[];drawAimGuide(250)');assert.equal(h.run('dots[0].x'),first+6);
+ h.run('dots=[];myPlayer.isAiming=false;drawAimGuide(0)');assert.equal(h.run('dots.length'),0);
+ h.run('myPlayer.isAiming=true;obstacles=[{x:125,y:50,w:10,h:100}];drawAimGuide(0)');assert.equal(h.run('dots.length'),0,'muzzle beyond wall must not leak guide');
+ h.run('obstacles=[];isSpectating=true;drawAimGuide(0)');assert.equal(h.run('dots.length'),0);
+ h.run('isSpectating=false;myPlayer.angle=Math.PI/2;obstacles=[{x:50,y:220,w:100,h:10}]');assert(Math.abs(h.run('aimGuideLength(myPlayer,1000)')-118)<1e-8);
 });

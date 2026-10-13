@@ -1,9 +1,12 @@
 /* Shared objective rules; no DOM, timers or transport dependencies. */
 (function(root){
- const SIZE=3600;
+ // Metre convention for this 2D adaptation; geometry is approximate, not a 1:1 port.
+ const UNITS_PER_METER=40, SIZE=4800;
+ const MOVE_MPS=5.4, QUIET_MPS=3.24;
+ const movementDistance=(dt,quiet=false)=>(quiet?QUIET_MPS:MOVE_MPS)*UNITS_PER_METER*Math.max(0,Math.min(.05,dt));
  // Hand-built 2D adaptation of Riot's official Ascent overhead layout.
  // Reference: https://playvalorant.com/en-gb/maps/#ascent
- // Coordinates below use the 640px reference; runtime geometry is 3600 units.
+ // Coordinates below use the 640px reference; runtime geometry is 4800 units.
  const SCALE=SIZE/640;
  const rect=([x,y,w,h])=>({x:x*SCALE,y:y*SCALE,w:w*SCALE,h:h*SCALE});
  const MAP_NAME='어센트 · ASCENT';
@@ -116,5 +119,5 @@
   }
   snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo}))};}
  }
- root.SpikeRules={Match,SIZE,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
+ root.SpikeRules={Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);
