@@ -81,7 +81,7 @@ test('general movement is time based at 30/60/120 FPS, with no sprint or diagona
  const h=harness();h.run(`gameStarted=true;gameEnded=false;isHost=false;isMobile=false;obstacles=[];keys['d']=true;updateAI=()=>{};updateNetwork=()=>{};myPlayer.isDead=false;myPlayer.hp=200;selectedMode='spike';`);
  for(const fps of [30,60,120])for(const stance of ['walk','sprint','stealth'])for(const diagonal of [false,true]){
   const distance=h.run(`(()=>{spikeFrameDt=1/${fps};keys['shift']=${stance==='sprint'};keys['control']=${stance==='stealth'};keys['w']=${diagonal};myPlayer.x=1200;myPlayer.y=1200;for(let i=0;i<${fps};i++)originalUpdate();return Math.hypot(myPlayer.x-1200,myPlayer.y-1200)})()`);
-  assert(Math.abs(distance-(stance==='stealth'?129.6:216))<1e-6,`${fps} FPS ${stance}`);
+  assert(Math.abs(distance-(stance==='stealth'||stance==='sprint'?129.6:216))<1e-6,`${fps} FPS ${stance}`);
  }
  h.run(`selectedMode='normal';keys['control']=false;keys['shift']=false;keys['w']=false;myPlayer.x=1200;originalUpdate()`);assert.equal(h.run('myPlayer.x'),1203);
  for(const fps of [30,60,120]){
@@ -149,4 +149,15 @@ test('aim dots stop at the first wall and move forward only while locally aiming
  h.run('myPlayer.isAiming=true;obstacles=[{x:125,y:50,w:10,h:100}];drawAimGuide(0)');assert.equal(h.run('dots.length'),0,'muzzle beyond wall must not leak guide');
  h.run('obstacles=[];isSpectating=true;drawAimGuide(0)');assert.equal(h.run('dots.length'),0);
  h.run('isSpectating=false;myPlayer.angle=Math.PI/2;obstacles=[{x:50,y:220,w:100,h:10}]');assert(Math.abs(h.run('aimGuideLength(myPlayer,1000)')-118)<1e-8);
+});
+
+test('quiet walking suppresses footsteps and general hearing uses metre scale',()=>{
+ const h=harness();h.run(`selectedMode='spike';`);
+ assert.equal(h.run("footstepRange({movementMode:'walk'})"),1600);
+ assert.equal(h.run("footstepRange({movementMode:'stealth'})"),0);
+ assert.equal(h.run("footstepAudible({movementMode:'stealth'},216)"),false);
+ assert.equal(h.run("footstepAudible({movementMode:'walk'},129.6)"),false);
+ assert.equal(h.run("footstepAudible({movementMode:'walk'},216)"),true);
+ h.run(`isHost=true;myPlayer.hp=200;myPlayer.isDead=false;myPlayer.movementMode='stealth';footstepTracks.clear();footstepCheckAt=0;updateFootsteps();myPlayer.x+=30;footstepCheckAt=0;updateFootsteps();`);
+ assert.equal(h.run('footstepEvents.length'),0);
 });

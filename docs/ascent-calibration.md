@@ -16,3 +16,9 @@ Evidence consulted (2026-10-13):
 - https://playvalorant.com/en-gb/maps/#ascent — visual layout reference.
 
 Automated checks execute the packed game and cover player and bot distances, sprint suppression, diagonal movement, spawn/site connectivity and actual bot navigation. No real-device latency or visual playtest is claimed.
+
+## Footstep tuning
+
+General mode uses a 40 m (1600 unit) hearing radius as an adaptation tuning choice, not a verified original-game radius. Sound, HUD events and bot hearing share this range. The volume curve is gently attenuated (power 0.65), with existing wall filtering and HRTF retained; distance is applied once. Riot describes a flatter curve prioritizing audibility: https://playvalorant.com/en-us/news/game-updates/ask-valorant-6/
+
+PC Shift in general mode selects quiet movement (3.24 m/s); Control remains a quiet alternative. Mobile joystick magnitude at or below 60% is quiet. Footstep creation also checks sampled displacement speed (quiet limit plus 6 units/s tolerance). Silent movement emits no self/remote sound or bot/visual footstep event. Other modes retain Shift sprint.

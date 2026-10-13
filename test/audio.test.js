@@ -46,3 +46,10 @@ test('world impacts piggyback existing sync, deduplicate on guests, and expire',
  h.advance();h.run('handleNetworkData(packets[0])');assert.equal(h.started.length,heard);
  h.run("isHost=true;safeSend(conn,{type:'SYNC'})");assert.equal(h.run('packets[1].sfx'),undefined);
 });
+
+test('footsteps share event range and do not disappear at the old 320-unit cutoff',()=>{
+ const h=harness();h.listeners.keydown();h.run("selectedMode='spike';playNearbyStep(1000,1600,{entityId:'enemy',x:1000,y:0})");assert(h.started.length>0);
+ const n=h.started.length;h.advance();h.run("playNearbyStep(1600,1600,{entityId:'enemy',x:1600,y:0})");assert.equal(h.started.length,n);
+ h.advance();h.run("playNearbyStep(10,0,{entityId:'quiet',x:10,y:0})");assert.equal(h.started.length,n);
+ h.run("myPlayer.isMoving=true;myPlayer.movementMode='stealth';GameAudio.poll()");const afterStart=h.started.length;h.advance();h.run('GameAudio.poll()');assert.equal(h.started.length,afterStart);
+});

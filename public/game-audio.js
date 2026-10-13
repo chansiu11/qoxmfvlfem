@@ -42,7 +42,7 @@
   const now=performance.now(),gap=kind==='ar'?65:kind==='step'?110:kind==='click'?35:90;if(now-(limits.get(key)||-Infinity)<gap)return;
   let gain=strength,pan=0,occluded=false;
   const listener=isSpectating&&spectateTarget?spectateTarget:myPlayer;
-  if(position&&listener){const distance=Math.hypot(position.x-listener.x,position.y-listener.y),range=kind==='step'?320:kind==='beep'?1100:1500;if(distance>=range)return;gain*=Math.pow(1-distance/range,1.5);pan=Math.max(-.85,Math.min(.85,(position.x-listener.x)/650));occluded=!hasLineOfSight(listener,position);if(occluded)gain*=.32;}
+  if(position&&listener){const distance=Math.hypot(position.x-listener.x,position.y-listener.y),range=kind==='step'?(position.range??(selectedMode==='spike'?1600:320)):kind==='beep'?1100:1500;if(distance>=range)return;gain*=kind==='step'?Math.pow(1-distance/range,.65):Math.pow(1-distance/range,1.5);pan=Math.max(-.85,Math.min(.85,(position.x-listener.x)/650));occluded=!hasLineOfSight(listener,position);if(occluded)gain*=.32;}
   limits.set(key,now);if(limits.size>128)limits.delete(limits.keys().next().value);
   const tone=(f,e,d,g=.2,delay=0)=>layer('triangle',f,e,d,g*gain,pan,delay,position,occluded);
   const burst=(f,d,g=.3)=>layer('noise',f,f,d,g*gain,pan,0,position,occluded);
@@ -114,7 +114,7 @@
   },i*850));
  });};panel.appendChild(testButton);document.body.appendChild(panel);
  const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);emit(weapon||p?.weapon||'ar',{x,y},1,'shot:'+id);};
- playNearbyStep=(distance,range,event)=>emit('step',event?{x:event.x,y:event.y}:null,Math.max(0,1-distance/range),event?'step:'+event.entityId:'nearby-step');
+ playNearbyStep=(distance,range,event)=>{if(range<=0||distance>=range)return;emit('step',event?{x:event.x,y:event.y,range}:null,event?.entityId===myPlayer.id ? .35 : 1,event?'step:'+event.entityId:'nearby-step');};
  let previous=null,lastTick=0,lastBeep=0,lastStep=0;const remoteAudio=new Map();
  function poll(){
   for(const item of activeSpatial)updateSpatial(item.node,item.position);
@@ -148,7 +148,6 @@
    if(state.ended&&!previous.ended)emit('end');
   }
   if(!state.ended&&(!state.dead||isSpectating)){
-   if(!state.dead&&myPlayer.isMoving&&!myPlayer.isDowned&&now-lastStep>(myPlayer.movementMode==='sprint'?280:myPlayer.movementMode==='stealth'?600:420)){lastStep=now;emit('step',null,myPlayer.movementMode==='stealth'?.15:.35,'own-step');}
    if(s?.phase==='planted'&&now-lastBeep>(s.time<5?180:s.time<10?350:950)){lastBeep=now;emit('beep',s.bomb);}
   }
   const listener=isSpectating&&spectateTarget?spectateTarget:myPlayer;
