@@ -34,3 +34,5 @@ Bucky, Judge and Shorty receive an additional 25% damage reduction across their 
 
 ## Close-range shotgun revision
 General-mode pellet damage by distance in metres (0–4 / 4–7 / 7–10 / 10–15 / 15+): Bucky 22 / 8 / 2.5 / 0.5 / 0; Judge 18 / 6 / 2 / 0.4 / 0; Shorty 15 / 5 / 1.5 / 0.3 / 0. End boundaries belong to the next band. Close damage is increased strongly while distant damage quickly becomes negligible, then zero. Values are per pellet, not guaranteed per shot; armor and pellet misses still apply. This supersedes the previous flat shotgun reduction. Other modes and guns are unchanged.
+
+Shotgun midrange follow-up: 4–7 m per-pellet damage increased to Bucky 15, Judge 12, Shorty 10; 7–10 m increased to 7, 6, 4.5 respectively. The 0–4 m and 10 m+ bands are unchanged.
