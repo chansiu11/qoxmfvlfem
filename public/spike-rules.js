@@ -1,9 +1,9 @@
 /* Shared objective rules; no DOM, timers or transport dependencies. */
 (function(root){
- const SIZE=2400;
+ const SIZE=3600;
  // Hand-built 2D adaptation of Riot's official Ascent overhead layout.
  // Reference: https://playvalorant.com/en-gb/maps/#ascent
- // Coordinates below use the 640px reference; runtime geometry is 2400 units.
+ // Coordinates below use the 640px reference; runtime geometry is 3600 units.
  const SCALE=SIZE/640;
  const rect=([x,y,w,h])=>({x:x*SCALE,y:y*SCALE,w:w*SCALE,h:h*SCALE});
  const MAP_NAME='어센트 · ASCENT';

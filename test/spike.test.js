@@ -33,7 +33,7 @@ function harness(){
 test('actual packed game starts objective match; other map modes and original mobile controls remain',()=>{
  const h=harness();assert(h.html.includes('value="spike"'));assert(!h.html.includes('id="btnFire"'));
  h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='1';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();`);
- assert.equal(h.run('gameStarted'),true);assert.equal(h.run('WORLD_SIZE'),2400);assert.equal(h.run('spikeMatch.phase'),'prep');assert.equal(h.run('spikeActors().length'),2);
+ assert.equal(h.run('gameStarted'),true);assert.equal(h.run('WORLD_SIZE'),3600);assert.equal(h.run('spikeMatch.phase'),'prep');assert.equal(h.run('spikeActors().length'),2);
  h.run(`spikeChoose('sniper')`);assert.equal(h.run('myPlayer.weapon'),'sniper');
  assert.equal(h.run(`generateMapData('normal',123).worldSize`),2400);assert(h.run(`generateMapData('br',123).obstacles.some(o=>o.type==='house')`));
  h.run(`spikeMatch.time=0;spikeMatch.tick(.05);spikeState=spikeMatch.snapshot();handleNetworkData({type:'SPIKE_WEAPON',player:{id:myPlayer.id},weapon:'ar'});`);assert.equal(h.run('myPlayer.weapon'),'sniper');
@@ -77,14 +77,14 @@ test('host rendering hides preplant marker for defenders and shows it after plan
  const h=harness();h.run(`selectedMode='spike';myPlayer.teamId='team_2';spikeState={attackTeam:1,bomb:{x:900,y:900,planted:false}};globalThis.marks=0;globalThis.mapctx={save(){},restore(){},scale(){},fillRect(x,y,w,h){if(w===24&&h===24)marks++},strokeRect(){},fillText(){},beginPath(){},arc(){},fill(){},stroke(){}};drawSpikeMap(mapctx);`);assert.equal(h.run('marks'),0);
  h.run(`spikeState.bomb.planted=true;drawSpikeMap(mapctx)`);assert.equal(h.run('marks'),1);
 });
-test('actual player and bot movement is halved only in general mode',()=>{
+test('general-mode movement scales with enlarged map and still disables sprint',()=>{
  const h=harness();h.run(`gameStarted=true;gameEnded=false;isHost=false;isMobile=false;obstacles=[];keys['d']=true;updateAI=()=>{};updateNetwork=()=>{};myPlayer.isDead=false;myPlayer.hp=200;`);
  for(const stance of ['walk','sprint','stealth']){
   h.run(`keys['shift']=${stance==='sprint'};keys['control']=${stance==='stealth'};`);
   const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';myPlayer.x=1200;myPlayer.y=1200;originalUpdate();myPlayer.x-1200`));
-  assert(distances[0]>0);assert.equal(distances[1],stance==='sprint'?1.5:distances[0]/2);
+  assert(distances[0]>0);assert.equal(distances[1],stance==='sprint'?2.25:distances[0]*.75);
  }
- const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';globalThis.testbot={id:'bot_test',x:1200,y:1200};walkBotRoute(testbot,{x:1300,y:1200},3);testbot.x-1200`));assert.equal(distances[1],distances[0]/2);assert(distances[1]>0);
+ const distances=['normal','spike'].map(mode=>h.run(`selectedMode='${mode}';globalThis.testbot={id:'bot_test',x:1200,y:1200};walkBotRoute(testbot,{x:1300,y:1200},3);testbot.x-1200`));assert.equal(distances[1],distances[0]*.75);assert(distances[1]>0);
 });
 test('actual bot pathfinder reaches both Ascent sites from both spawns',()=>{
  const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='1';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();`);
@@ -125,4 +125,12 @@ test('guest bullets move between packets, reconcile by pellet id, and stop at wa
 test('host emits immediate pellet spawn event and guest local shot ids are retained',()=>{
  const h=harness();h.run(`isHost=true;selectedMode='normal';myPlayer.id='host';myPlayer.weapon='shotgun';myPlayer.clipAmmo=5;myPlayer.isDead=false;globalThis.events=[];broadcastData=p=>events.push(p);shoot(myPlayer,0,'host_test');`);
  assert(h.run("events.some(p=>p.type==='BULLET_SPAWN')"));assert(h.run("events.find(p=>p.type==='BULLET_SPAWN').bullets.every(b=>b.shotId==='host_test'&&Number.isFinite(b.dx))"));assert.equal(h.run('new Set(bullets.map(b=>b.bulletId)).size'),h.run('bullets.length'));
+});
+test('objective HUD shows timed plant progress and saved half-defuse without revealing enemy planting',()=>{
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.hp=200;myPlayer.isDead=false;spikeState={phase:'live',attackTeam:1,actor:'me',progress:2,bomb:{carrier:'me',planted:false}};updateSpikeAction();`);
+ assert.equal(h.run('spikeAction.style.display'),'block');assert.equal(h.run("document.getElementById('spikeActionFill').style.width"),'50%');assert.equal(h.run("document.getElementById('spikeActionTime').textContent"),'2.0초');
+ h.run(`remotePlayers.enemy={id:'enemy',teamId:'team_1',hp:200};myPlayer.teamId='team_2';spikeState.actor='enemy';spikeState.bomb.carrier='enemy';updateSpikeAction();`);assert.equal(h.run('spikeAction.style.display'),'none');
+ h.run(`spikeState.phase='planted';spikeState.actor=null;spikeState.progress=3.5;spikeState.bomb={planted:true,x:myPlayer.x,y:myPlayer.y,defuseCheckpoint:3.5};updateSpikeAction();`);
+ assert.equal(h.run('spikeAction.style.display'),'block');assert.equal(h.run("document.getElementById('spikeActionFill').style.width"),'50%');assert.equal(h.run("document.getElementById('spikeActionTime').textContent"),'3.5초');assert(h.run("document.getElementById('spikeActionSaved').textContent.includes('50% 저장')"));
+ h.run(`spikeState.phase='end';updateSpikeAction()`);assert.equal(h.run('spikeAction.style.display'),'none');
 });
