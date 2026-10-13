@@ -183,9 +183,9 @@ test('shield damage separates HP, exhausts armor and regenerates only from reser
 });
 test('catalog has working bullets, distance falloff, shotguns and distinct reloads',()=>{
  const guns=Object.values(SpikeCatalog.weapons);assert(guns.length>=19);for(const w of guns){assert(w.maxClip>0&&w.pellets>=1&&w.reloadMs>0&&w.cooldown>0);assert(w.icon.startsWith('https://'));}
- assert.equal(SpikeCatalog.weapons.v_vandal.cost,2900);assert.equal(SpikeCatalog.weapons.v_operator.damage,150);assert.equal(SpikeCatalog.weapons.v_classic.cost,0);
- assert.equal(SpikeRules.bulletDamage({weapon:'v_phantom',startX:0,startY:0},{x:400,y:0}),39);
- assert.equal(SpikeRules.bulletDamage({weapon:'v_phantom',startX:0,startY:0},{x:1200,y:0}),35);
+ assert.equal(SpikeCatalog.weapons.v_vandal.cost,2900);assert.equal(SpikeCatalog.weapons.v_operator.damage,120);assert.equal(SpikeCatalog.weapons.v_classic.cost,0);
+ assert.equal(SpikeRules.bulletDamage({weapon:'v_phantom',startX:0,startY:0},{x:400,y:0}),31.2);
+ assert.equal(SpikeRules.bulletDamage({weapon:'v_phantom',startX:0,startY:0},{x:1200,y:0}),28);
 });
 test('host validates guest purchase sequences, protects money and armor, synchronizes loadout',()=>{
  const h=harness();h.run(`isHost=true;myPlayer.id='host';remotePlayers.guest={...myPlayer,id:'guest'};document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='false';hostStartGame();globalThis.buy={type:'SPIKE_BUY',player:{id:'guest'},item:'v_ghost',round:1,seq:1};handleNetworkData(buy);`);
@@ -203,5 +203,5 @@ test('store opens in prep, shows weapon categories and armor, closes on live pha
 });
 test('packed Vandal shot consumes purchased heavy shield and damages HP on host',()=>{
  const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;isSpawnSelecting=false;isSpectating=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};hasLineOfSight=()=>true;myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.x=100;myPlayer.y=100;myPlayer.angle=0;myPlayer.weapon='v_vandal';myPlayer.clipAmmo=25;myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isShooting=false;myPlayer.isReloading=false;spikeState={phase:'live'};remotePlayers.enemy={id:'enemy',x:175,y:100,hp:100,maxHp:100,isDead:false,teamId:'team_2',shieldType:'heavy',shield:50,weapon:'v_classic'};shoot(myPlayer,0);originalUpdate();`);
- assert.equal(h.run('myPlayer.clipAmmo'),24);assert(Math.abs(h.run('remotePlayers.enemy.shield')-23.6)<1e-6);assert(Math.abs(h.run('remotePlayers.enemy.hp')-86.4)<1e-6);
+ assert.equal(h.run('myPlayer.clipAmmo'),24);assert(Math.abs(h.run('remotePlayers.enemy.shield')-28.88)<1e-6);assert(Math.abs(h.run('remotePlayers.enemy.hp')-89.12)<1e-6);
 });

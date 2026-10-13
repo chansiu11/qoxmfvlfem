@@ -5,8 +5,8 @@ import vm from 'node:vm';
 const code=fs.readFileSync(new URL('../public/game-audio.js',import.meta.url),'utf8');
 function harness(){
  let now=1000;const started=[],listeners={},handlers={},panners=[];
- const param=()=>({value:0,setValueAtTime(){},exponentialRampToValueAtTime(){}});
- const node=()=>({gain:param(),frequency:param(),pan:param(),threshold:param(),ratio:param(),connect(){},disconnect(){},start(){started.push(this)},stop(){this.onended?.()}});
+ const param=()=>({value:0,setValueAtTime(v){this.value=v},exponentialRampToValueAtTime(v){this.value=v}});
+ const node=()=>({gain:param(),frequency:param(),pan:param(),threshold:param(),ratio:param(),connect(){},disconnect(){},start(){started.push(this)},stop(t){this.stopAt=t;this.onended?.()}});
  class Audio{constructor(){this.state='running';this.currentTime=0;this.sampleRate=1000;}createGain(){return node()}createDynamicsCompressor(){return node()}createBiquadFilter(){return node()}createBufferSource(){return node()}createOscillator(){return node()}createPanner(){const n={...node(),positionX:param(),positionY:param(),positionZ:param()};panners.push(n);return n;}createStereoPanner(){return node()}createBuffer(){return {getChannelData:()=>new Float32Array(800)}}}
  const el=()=>({style:{},setAttribute(){},appendChild(){}});
  const c=vm.createContext({window:{AudioContext:Audio},document:{hidden:false,addEventListener:(k,v)=>{(handlers[k]||=[]).push(v);listeners[k]=(e={type:k})=>handlers[k].forEach(f=>f(e));},createElement:el,body:el()},localStorage:{getItem:()=>null,setItem(){}},performance:{now:()=>now},isHost:true,safeSend:(c,d)=>c.send(d),handleNetworkData(){},myPlayer:{id:'me',x:0,y:0,hp:200,clipAmmo:0,kills:0,teamId:'team_1'},isSpectating:false,spectateTarget:null,hasLineOfSight:()=>true,getCombatEntityById:()=>({weapon:'ar'}),addGunshotEvent(){},playNearbyStep(){},update(){},gameStarted:true,gameEnded:false,zoneStage:1,selectedMode:'normal',spikeState:null});
@@ -52,4 +52,10 @@ test('footsteps share event range and do not disappear at the old 320-unit cutof
  const n=h.started.length;h.advance();h.run("playNearbyStep(1600,1600,{entityId:'enemy',x:1600,y:0})");assert.equal(h.started.length,n);
  h.advance();h.run("playNearbyStep(10,0,{entityId:'quiet',x:10,y:0})");assert.equal(h.started.length,n);
  h.run("myPlayer.isMoving=true;myPlayer.movementMode='stealth';GameAudio.poll()");const afterStart=h.started.length;h.advance();h.run('GameAudio.poll()');assert.equal(h.started.length,afterStart);
+});
+
+test('every weapon emits a distinct firing signature through the network sound hook',()=>{
+ const h=harness();h.listeners.keydown();const ids=['ar','sniper','shotgun','v_classic','v_shorty','v_frenzy','v_ghost','v_bandit','v_sheriff','v_stinger','v_spectre','v_bucky','v_judge','v_bulldog','v_guardian','v_phantom','v_vandal','v_warden','v_marshal','v_outlaw','v_operator','v_ares','v_odin'];const signatures=new Set();
+ for(const id of ids){h.advance();const n=h.started.length;h.run(`addGunshotEvent(0,0,'other','${id}')`);const voices=h.started.slice(n);assert.equal(voices.length,3,id);signatures.add(JSON.stringify(voices.map(v=>[v.type,v.frequency.value,v.stopAt])));}
+ assert.equal(signatures.size,ids.length);
 });

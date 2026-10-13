@@ -20,3 +20,6 @@ Scope: general/spike mode only. Deathmatch and battle royale keep their loadouts
 - Store uses Valorant-style category columns, team/economy sidebar and armor/details pane, with this game's teal/slate/gold treatment and mobile layout.
 
 Validation: packed-code VM tests exercise purchase/replay rejection, host/guest protected state, survivor/death round transitions, credit rewards, refunds, shield absorption/regeneration, actual Vandal projectile damage, store lifecycle, and previous mode/audio behavior. No real browser/device visual test was available in this environment.
+
+## Damage/audio balance revision
+All modes now apply 80% of their previous gun damage, including every catalog distance band and shotgun pellet. Shop damage figures use the same adjusted data. Each of the 20 catalog guns and three legacy weapons has a distinct procedural transient/body/mechanical-tail profile; spatial positioning, occlusion and mute remain unchanged. These are custom synthesized effects, not recordings from Valorant.

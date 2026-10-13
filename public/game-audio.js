@@ -37,15 +37,36 @@
   if(node.positionX){node.positionX.value=x;node.positionY.value=0;node.positionZ.value=z;}
   else node.setPosition(x,0,z);
  }
+ // Each weapon has its own transient, low body and mechanical tail.
+ // [noise cutoff, noise duration, body pitch, body duration, gain, tail pitch]
+ const gunVoices={
+  ar:[2900,.085,170,.09,.40,760],sniper:[1900,.32,105,.32,.60,410],shotgun:[1300,.24,85,.22,.65,260],
+  v_classic:[2700,.055,235,.075,.32,940],v_shorty:[950,.14,92,.16,.45,340],
+  v_frenzy:[3600,.038,265,.052,.27,1250],v_ghost:[1150,.045,310,.065,.24,780],
+  v_bandit:[2400,.07,185,.105,.36,620],v_sheriff:[2200,.14,125,.19,.49,480],
+  v_stinger:[4100,.028,290,.04,.25,1500],v_spectre:[1450,.035,245,.048,.23,1020],
+  v_bucky:[850,.20,68,.24,.58,210],v_judge:[1750,.12,105,.15,.47,380],
+  v_bulldog:[3300,.065,205,.082,.35,890],v_guardian:[2550,.12,140,.17,.45,550],
+  v_phantom:[1550,.052,220,.072,.29,720],v_vandal:[3100,.095,155,.12,.41,680],
+  v_warden:[2250,.13,118,.18,.46,510],v_marshal:[3900,.16,180,.22,.44,1110],
+  v_outlaw:[1350,.24,78,.28,.56,310],v_operator:[1100,.38,55,.43,.65,180],
+  v_ares:[2600,.07,128,.10,.38,580],v_odin:[1800,.095,88,.14,.43,440]
+ };
  function emit(kind,position=null,strength=1,key=kind){
   if(!context||context.state!=='running'||volume===0||document.hidden)return;
-  const now=performance.now(),gap=kind==='ar'?65:kind==='step'?110:kind==='click'?35:90;if(now-(limits.get(key)||-Infinity)<gap)return;
+  const gun=gunVoices[kind];
+  const now=performance.now(),gap=gun?35:kind==='step'?110:kind==='click'?35:90;if(now-(limits.get(key)||-Infinity)<gap)return;
   let gain=strength,pan=0,occluded=false;
   const listener=isSpectating&&spectateTarget?spectateTarget:myPlayer;
   if(position&&listener){const distance=Math.hypot(position.x-listener.x,position.y-listener.y),range=kind==='step'?(position.range??(selectedMode==='spike'?1600:320)):kind==='beep'?1100:1500;if(distance>=range)return;gain*=kind==='step'?Math.pow(1-distance/range,.65):Math.pow(1-distance/range,1.5);pan=Math.max(-.85,Math.min(.85,(position.x-listener.x)/650));occluded=!hasLineOfSight(listener,position);if(occluded)gain*=.32;}
   limits.set(key,now);if(limits.size>128)limits.delete(limits.keys().next().value);
   const tone=(f,e,d,g=.2,delay=0)=>layer('triangle',f,e,d,g*gain,pan,delay,position,occluded);
   const burst=(f,d,g=.3)=>layer('noise',f,f,d,g*gain,pan,0,position,occluded);
+  if(gun){
+   const [cut,duration,pitch,body,loud,tail]=gun;
+   burst(cut,duration,loud);tone(pitch,Math.max(28,pitch*.27),body,loud*.7);
+   tone(tail,tail*.55,.027,loud*.13,Math.min(.08,duration*.55));return;
+  }
   switch(kind){
    case 'click':tone(950,650,.035,.09);break;
    case 'select':tone(580,850,.07,.1);break;
@@ -113,7 +134,7 @@
    if(i===3)setTimeout(()=>{if(generation===testGeneration)testButton.textContent='방향 테스트';},700);
   },i*850));
  });};panel.appendChild(testButton);document.body.appendChild(panel);
- const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);const kind=weapon||p?.weapon||'ar';emit(typeof SpikeCatalog!=='undefined'&&SpikeCatalog.weapons[kind]?SpikeCatalog.weapons[kind].sound:kind,{x,y},1,'shot:'+id);};
+ const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);const kind=weapon||p?.weapon||'ar';emit(kind,{x,y},1,'shot:'+id);};
  playNearbyStep=(distance,range,event)=>{if(range<=0||distance>=range)return;emit('step',event?{x:event.x,y:event.y,range}:null,event?.entityId===myPlayer.id ? .35 : 1,event?'step:'+event.entityId:'nearby-step');};
  let previous=null,lastTick=0,lastBeep=0,lastStep=0;const remoteAudio=new Map();
  function poll(){
