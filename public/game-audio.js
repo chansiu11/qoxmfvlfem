@@ -113,7 +113,7 @@
    if(i===3)setTimeout(()=>{if(generation===testGeneration)testButton.textContent='방향 테스트';},700);
   },i*850));
  });};panel.appendChild(testButton);document.body.appendChild(panel);
- const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);emit(weapon||p?.weapon||'ar',{x,y},1,'shot:'+id);};
+ const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);const kind=weapon||p?.weapon||'ar';emit(typeof SpikeCatalog!=='undefined'&&SpikeCatalog.weapons[kind]?SpikeCatalog.weapons[kind].sound:kind,{x,y},1,'shot:'+id);};
  playNearbyStep=(distance,range,event)=>{if(range<=0||distance>=range)return;emit('step',event?{x:event.x,y:event.y,range}:null,event?.entityId===myPlayer.id ? .35 : 1,event?'step:'+event.entityId:'nearby-step');};
  let previous=null,lastTick=0,lastBeep=0,lastStep=0;const remoteAudio=new Map();
  function poll(){
@@ -121,11 +121,11 @@
   const now=performance.now();if(now-lastTick<40)return;lastTick=now;
   if(!gameStarted){previous=null;remoteAudio.clear();return;}
   const s=selectedMode==='spike'?spikeState:null;
-  const state={hp:myPlayer.hp,kills:myPlayer.kills||0,dead:!!myPlayer.isDead,down:!!myPlayer.isDowned,reload:!!myPlayer.isReloading,clip:myPlayer.clipAmmo,weapon:myPlayer.weapon,ended:gameEnded,zone:zoneStage,round:s?.round,phase:s?.phase,actor:s?.actor,half:s?.bomb?.defuseCheckpoint||0,reviving:(myPlayer.reviveProgress||0)>0,scope:myPlayer.equippedScope,armor:myPlayer.equippedBodyArmor,helmet:myPlayer.equippedHelmet,countdown:s?.phase==='prep'?Math.ceil(s.time):null};
+  const state={shield:myPlayer.shield||0,hp:myPlayer.hp,kills:myPlayer.kills||0,dead:!!myPlayer.isDead,down:!!myPlayer.isDowned,reload:!!myPlayer.isReloading,clip:myPlayer.clipAmmo,weapon:myPlayer.weapon,ended:gameEnded,zone:zoneStage,round:s?.round,phase:s?.phase,actor:s?.actor,half:s?.bomb?.defuseCheckpoint||0,reviving:(myPlayer.reviveProgress||0)>0,scope:myPlayer.equippedScope,armor:myPlayer.equippedBodyArmor,helmet:myPlayer.equippedHelmet,countdown:s?.phase==='prep'?Math.ceil(s.time):null};
   if(!previous)emit('start');else{
    if(state.round!==previous.round){emit('start');lastBeep=0;}
    else{
-    if(state.hp<previous.hp&&!state.dead)emit('hurt');
+    if((state.hp<previous.hp||state.shield<previous.shield)&&!state.dead)emit('hurt');
     if(state.dead&&!previous.dead)emit('death');
     if(!state.dead&&previous.dead)emit('start');
     if(state.kills>previous.kills)emit('kill');

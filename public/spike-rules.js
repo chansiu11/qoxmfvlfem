@@ -61,6 +61,18 @@
   previous=runs;
  }
  WALLS.push(...COVERS);
+ const catalog=()=>root.SpikeCatalog.weapons;
+ const gear=()=>root.SpikeCatalog.armor;
+ const credit=(p,n)=>p.credits=Math.min(9000,Math.max(0,(p.credits||0)+n));
+ const copy=x=>x==null?null:JSON.parse(JSON.stringify(x));
+ function equip(p,slot){
+  const item=p.loadout?.[slot];if(!item||!catalog()[item.id])return false;
+  if(p.weapon&&p.activeSlot&&p.loadout[p.activeSlot])Object.assign(p.loadout[p.activeSlot],{clip:p.clipAmmo,reserve:p.reserveAmmo});
+  p.activeSlot=slot;p.weapon=item.id;p.clipAmmo=item.clip;p.reserveAmmo=item.reserve;p.isReloading=false;p.reloadStartedAt=0;p._reloadToken=(p._reloadToken||0)+1;return true;
+ }
+ const fresh=id=>({id,clip:catalog()[id].maxClip,reserve:catalog()[id].maxClip*4});
+ function shieldDamage(p,damage){const a=gear()[p.shieldType],blocked=a?Math.min(p.shield||0,damage*a.absorb):0;p.shield=Math.max(0,(p.shield||0)-blocked);p._shieldDelay=3;return damage-blocked;}
+ function bulletDamage(b,p){const w=catalog()[b.weapon];if(!w)return b.damage;const d=Math.hypot(p.x-b.startX,p.y-b.startY)/UNITS_PER_METER;return (w.damageRanges.find(r=>d<r.rangeEndMeters)||w.damageRanges.at(-1)).bodyDamage;}
  const alive=p=>p&&p.hp>0&&!p.isDead&&!p.spectator;
  const inside=(p,r)=>p.x>=r.x+20&&p.x<=r.x+r.w-20&&p.y>=r.y+20&&p.y<=r.y+r.h-20;
  class Match{
@@ -68,25 +80,50 @@
   team(p){return p.teamId==='team_2'?2:1;}
   spawn(p){return SPAWNS[this.team(p)===this.attackTeam?0:1];}
   begin(){
-   this.round++;this.attackTeam=this.round%2?1:2;this.phase='prep';this.time=15;this.result='';this.winnerTeam=null;this.actor=null;this.progress=0;this.anchor=null;
+   this.round++;this.attackTeam=this.round%2?1:2;this.phase='prep';this.time=30;this.result='';this.winnerTeam=null;this.actor=null;this.progress=0;this.anchor=null;
    const indexes=[0,0];this.spawns={};
    for(const p of this.actors()){
     if(p.spectator)continue;const team=this.team(p),r=this.spawn(p),i=indexes[team-1]++;
     const cols=Math.max(1,Math.floor((r.w-40)/55)),rows=Math.max(1,Math.floor((r.h-40)/55));
     p.x=r.x+35+(i%cols)*55;p.y=r.y+35+(Math.floor(i/cols)%rows)*55;
-    p.hp=200;p.maxHp=200;p.isDead=false;p.isDowned=false;p.isMoving=false;p.isShooting=false;p._spikeUse=false;p.isReloading=false;
-    p.weapon=['ar','sniper','shotgun'].includes(p.weapon)?p.weapon:'ar';
-    p.clipAmmo={ar:30,sniper:5,shotgun:8}[p.weapon];p.reserveAmmo=p.clipAmmo*4;p.equippedBodyArmor=null;p.equippedHelmet=null;
+    const lost=p.isDead||p.hp<=0||this.round===1||!p.loadout;
+    if(this.round===1){p.credits=800;p.lossStreak=0;}
+    if(lost){p.loadout={primary:null,secondary:fresh('v_classic')};p.shieldType=null;p.shield=0;p.shieldPool=0;}
+    for(const slot of ['primary','secondary'])if(p.loadout?.[slot])p.loadout[slot]=fresh(p.loadout[slot].id);
+    p.weapon=null;p.activeSlot=null;equip(p,p.loadout.primary?'primary':'secondary');p.purchases={};p._shieldDelay=0;
+    p.hp=100;p.maxHp=100;p.isDead=false;p.isDowned=false;p.isMoving=false;p.isShooting=false;p._spikeUse=false;p.isReloading=false;
+    p.equippedBodyArmor=null;p.equippedHelmet=null;
     this.spawns[p.id]={x:p.x,y:p.y};
    }
    const attackers=this.actors().filter(p=>alive(p)&&this.team(p)===this.attackTeam);
    const carrier=attackers.find(p=>!p.id.startsWith('bot_'))||attackers[0];
    this.bomb={carrier:carrier?.id||null,x:carrier?.x||250,y:carrier?.y||1200,planted:false,site:null,timer:45,defuseCheckpoint:0};
   }
-  choose(p,weapon){if(this.phase!=='prep'||!alive(p)||!inside(p,this.spawn(p))||!['ar','sniper','shotgun'].includes(weapon))return false;p.weapon=weapon;p.clipAmmo={ar:30,sniper:5,shotgun:8}[weapon];p.reserveAmmo=p.clipAmmo*4;p.isReloading=false;return true;}
-  finish(team,reason){if(!['live','planted'].includes(this.phase))return;this.score[team-1]++;this.winnerTeam=team;this.phase=this.score[team-1]>=13?'finished':'end';this.time=this.phase==='finished'?10:6;this.result=reason;this.progress=0;this.actor=null;for(const p of this.actors()){p.isShooting=false;p._spikeUse=false;}}
+  canBuy(p){return this.phase==='prep'&&alive(p)&&inside(p,this.spawn(p));}
+  choose(p,id){return this.buy(p,id);}
+  buy(p,id){
+   if(!this.canBuy(p))return false;const w=catalog()[id],a=gear()[id];if(!w&&!a)return false;
+   const slot=w?w.slot:'armor',old=p.purchases[slot],refund=old?.cost||0,cost=(w||a).cost;
+   if(w&&p.loadout[slot]?.id===id)return false;
+   if(a&&p.shieldType===id&&p.shield===a.capacity&&p.shieldPool===a.pool)return false;
+   if(p.credits+refund<cost)return false;
+   const before=old?old.before:copy(w?p.loadout[slot]:{type:p.shieldType,shield:p.shield,pool:p.shieldPool});
+   credit(p,refund-cost);p.purchases[slot]={id,cost,before};
+   if(w){if(p.activeSlot===slot)p.activeSlot=null;p.loadout[slot]=fresh(id);equip(p,slot);}
+   else{p.shieldType=id;p.shield=a.capacity;p.shieldPool=a.pool;p._shieldDelay=0;}return true;
+  }
+  sell(p,slot){
+   if(!this.canBuy(p)||!['primary','secondary','armor'].includes(slot)||!p.purchases[slot])return false;
+   const r=p.purchases[slot];credit(p,r.cost);delete p.purchases[slot];
+   if(slot==='armor'){p.shieldType=r.before.type;p.shield=r.before.shield;p.shieldPool=r.before.pool;}
+   else{p.activeSlot=null;p.loadout[slot]=r.before;equip(p,p.loadout.primary?'primary':'secondary');}return true;
+  }
+  switch(p,slot){if(!alive(p)||!['prep','live','planted'].includes(this.phase)||p._spikeUse)return false;return equip(p,slot);}
+  rewardKill(id){const p=this.actors().find(p=>p.id===id);if(p&&['live','planted'].includes(this.phase))credit(p,200);}
+  finish(team,reason){if(!['live','planted'].includes(this.phase))return;for(const p of this.actors()){if(this.team(p)===team){p.lossStreak=0;credit(p,3000);}else{p.lossStreak=Math.min(3,(p.lossStreak||0)+1);credit(p,[0,1900,2400,2900][p.lossStreak]);}}this.score[team-1]++;this.winnerTeam=team;this.phase=this.score[team-1]>=13?'finished':'end';this.time=this.phase==='finished'?10:6;this.result=reason;this.progress=0;this.actor=null;for(const p of this.actors()){p.isShooting=false;p._spikeUse=false;}}
   tick(dt){
    dt=Math.max(0,Math.min(.1,dt));this.time-=dt;
+   for(const p of this.actors())if(alive(p)&&p.shieldType==='regen'){p._shieldDelay=Math.max(0,(p._shieldDelay||0)-dt);if(p._shieldDelay===0){const n=Math.min(25-(p.shield||0),p.shieldPool||0,25*dt);p.shield+=n;p.shieldPool-=n;}}
    if(this.phase==='finished')return;
    if(this.phase==='end'){if(this.time<=0)this.begin();return;}
    if(this.phase==='prep'){
@@ -108,6 +145,7 @@
     if(b.planted&&this.progress>=3.5)b.defuseCheckpoint=3.5;
     if(this.progress>=(b.planted?7:4)){
      if(b.planted){this.finish(this.team(user),'스파이크 해체 · 수비 승리');return;}
+     for(const p of players)if(this.team(p)===this.attackTeam)credit(p,300);
      b.planted=true;b.carrier=null;b.x=user.x;b.y=user.y;b.site=SITES.find(s=>Math.hypot(user.x-s.x,user.y-s.y)<s.r).name;b.timer=45;this.phase='planted';this.time=45;this.actor=null;this.progress=0;
     }
    }else{this.actor=null;this.progress=b.planted?(b.defuseCheckpoint||0):0;this.anchor=null;}
@@ -117,7 +155,7 @@
    else if(!defenders.length)this.finish(this.attackTeam,'수비팀 전멸 · 공격 승리');
    else if(this.time<=0)this.finish(3-this.attackTeam,'시간 초과 · 수비 승리');
   }
-  snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo}))};}
+  snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo,maxHp:p.maxHp,credits:p.credits,shield:p.shield,shieldType:p.shieldType,shieldPool:p.shieldPool,activeSlot:p.activeSlot,loadout:copy(p.loadout),purchases:copy(p.purchases)}))};}
  }
- root.SpikeRules={Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
+ root.SpikeRules={equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

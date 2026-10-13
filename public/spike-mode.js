@@ -1,4 +1,5 @@
 /* Adapter for the existing P2P game. Other modes retain their original behavior. */
+Object.assign(WEAPONS,SpikeCatalog.weapons);
 let spikeFrameDt=1/60;
 let spikeMatch=null,spikeState=null,spikeHeld=false,spikeLastTick=performance.now(),spikeAppliedRound=0;
 const spikeActors=()=>[...roomHumans(),...aiBots].filter(p=>!isAssignedSpectator(p.id));
@@ -28,8 +29,8 @@ hostStartGame=()=>{
 };
 const originalStart=startGame;
 startGame=()=>{
- if(selectedMode!=='spike'){spikeMatch=null;spikeState=null;return originalStart();}
- spikeAppliedRound=0;spikeHeld=false;spikeLastTick=performance.now();
+ if(selectedMode!=='spike'){spikeMatch=null;spikeState=null;myPlayer.maxHp=200;spikeToggleShop(false);return originalStart();}
+ spikeAppliedRound=0;spikeShopRound=0;spikeHeld=false;spikeLastTick=performance.now();
  originalStart();WORLD_SIZE=SpikeRules.SIZE;isSpawnSelecting=false;
  document.getElementById('hudGameMode').textContent='일반게임 · 어센트';
  if(isHost){spikeMatch=new SpikeRules.Match(spikeActors);spikeState=spikeMatch.snapshot();spikeApply(spikeState);}
@@ -39,14 +40,14 @@ openDeathmatchWeaponModal=(...args)=>{if(selectedMode!=='spike')return originalW
 const originalBotRespawn=respawnBot;
 respawnBot=p=>{if(selectedMode!=='spike')originalBotRespawn(p);};
 const originalShoot=shoot;
-shoot=(p,spread,shotId)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;return originalShoot(p,spread,shotId);};
+shoot=(p,spread,shotId)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p._semiLatch)return;const ammo=p.clipAmmo;const result=originalShoot(p,spread,shotId);if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p.clipAmmo<ammo)p._semiLatch=true;return result;};
 const originalEntity=networkEntityState;
 networkEntityState=p=>{const state=originalEntity(p);if(selectedMode==='spike'){state._spikeUse=p===myPlayer?spikeHeld:!!p._spikeUse;state._spikeRound=spikeAppliedRound;}return state;};
 const originalSend=safeSend;
 safeSend=(c,data)=>{if(selectedMode==='spike'&&isHost&&data?.type==='SYNC'&&spikeMatch)data={...data,spike:spikeMatch.snapshot(getCombatEntityById(c.playerId)||{teamId:"spectator"})};return originalSend(c,data);};
 function spikeApply(state){
  if(!state)return;spikeState=state;
- for(const actor of state.actors||[]){const p=getCombatEntityById(actor.id);if(p)p.teamId=actor.teamId;}
+ for(const actor of state.actors||[]){const p=getCombatEntityById(actor.id);if(p){p.teamId=actor.teamId;if(!isHost){p.credits=actor.credits;p.shield=actor.shield;p.shieldType=actor.shieldType;p.shieldPool=actor.shieldPool;}}}
  const me=(state.actors||[]).find(p=>p.id===myPlayer.id);
  if(state.round!==spikeAppliedRound){
   spikeAppliedRound=state.round;spikeHeld=false;bullets.length=0;isRespawning=false;isSpectating=isAssignedSpectator(myPlayer.id);spectateTarget=null;
@@ -54,20 +55,27 @@ function spikeApply(state){
   for(const id of ['spectateHUD','respawnHUD','weaponSelectModal','fullMapOverlay'])document.getElementById(id).style.display='none';
   document.getElementById('statusHUD').style.display='block';if(isMobile)document.getElementById('mobileControls').style.display='block';
  }else if(me){
-  myPlayer.hp=me.hp;myPlayer.kills=me.kills;myPlayer.deaths=me.deaths;
+  myPlayer.credits=me.credits;myPlayer.shield=me.shield;myPlayer.shieldType=me.shieldType;myPlayer.shieldPool=me.shieldPool;myPlayer.loadout=me.loadout;myPlayer.purchases=me.purchases;myPlayer.activeSlot=me.activeSlot;myPlayer.hp=me.hp;myPlayer.kills=me.kills;myPlayer.deaths=me.deaths;
   if(me.isDead&&!myPlayer.isDead){myPlayer.isDead=true;startSpectating();}
-  if(state.phase==='prep'){myPlayer.weapon=me.weapon;myPlayer.clipAmmo=me.clipAmmo;myPlayer.reserveAmmo=me.reserveAmmo;}
+  if(state.phase==='prep'||myPlayer.weapon!==me.weapon){myPlayer.isReloading=false;myPlayer._reloadToken=(myPlayer._reloadToken||0)+1;myPlayer.weapon=me.weapon;myPlayer.clipAmmo=me.clipAmmo;myPlayer.reserveAmmo=me.reserveAmmo;}
  }
  spikeUI();
 }
 const originalNetwork=handleNetworkData;
 handleNetworkData=data=>{
  if(selectedMode==='spike'&&isHost){
-  if(data.type==='SPIKE_WEAPON'){const p=getCombatEntityById(data.player?.id);if(p)spikeMatch?.choose(p,data.weapon);return;}
+  if(['SPIKE_BUY','SPIKE_SELL','SPIKE_SWITCH','SPIKE_WEAPON'].includes(data.type)){
+   const p=remotePlayers[data.player?.id];if(!p||!spikeMatch||data.round!==spikeMatch.round||!Number.isSafeInteger(data.seq)||data.seq<=(p._shopSeq||0))return;
+   p._shopSeq=data.seq;
+   if(data.type==='SPIKE_BUY')spikeMatch.buy(p,data.item);
+   if(data.type==='SPIKE_SELL')spikeMatch.sell(p,data.slot);
+   if(data.type==='SPIKE_SWITCH')spikeMatch.switch(p,data.slot);
+   return;
+  }
   if(data.type==='SYNC'&&data.player){
    const p=remotePlayers[data.player.id];if(!p||data.player._spikeRound!==spikeMatch?.round)return;
    if(data.player.isReloading&&!p.isReloading)reloadWeapon(p);
-   data={...data,player:{...data.player,isReloading:p.isReloading,_spikeShotAt:p._spikeShotAt,hp:p.hp,maxHp:200,isDead:p.isDead,kills:p.kills,deaths:p.deaths,teamId:p.teamId,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo}};
+   data={...data,player:{...data.player,isReloading:p.isReloading,_spikeShotAt:p._spikeShotAt,hp:p.hp,maxHp:100,credits:p.credits,loadout:p.loadout,purchases:p.purchases,activeSlot:p.activeSlot,shield:p.shield,shieldType:p.shieldType,shieldPool:p.shieldPool,equippedBodyArmor:null,equippedHelmet:null,isDead:p.isDead,kills:p.kills,deaths:p.deaths,teamId:p.teamId,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo}};
    // Reload stays compatible with the existing client, bounded by this weapon's capacity.
    if(p.weapon&&Number.isFinite(data.player.clipAmmo))data.player.clipAmmo=Math.min(WEAPONS[p.weapon].maxClip,data.player.clipAmmo);
   }
@@ -83,11 +91,19 @@ handleNetworkData=data=>{
  if(data.type==='ROOM_SETTINGS'&&data.mode==='spike')document.getElementById('guestModeVal').textContent='일반게임 · 어센트';
  if(selectedMode==='spike'&&!isHost&&data.spike)spikeApply(data.spike);
 };
-function spikeChoose(weapon){
- if(selectedMode!=='spike'||spikeState?.phase!=='prep'||!SpikeRules.inside(myPlayer,spikeSpawn(myPlayer)))return;
- if(isHost){spikeMatch.choose(myPlayer,weapon);spikeState=spikeMatch.snapshot();spikeUI();}
- else broadcastData({type:'SPIKE_WEAPON',player:{id:myPlayer.id},weapon});
+let spikeShopSeq=0;
+function spikeShopAction(type,value){
+ if(selectedMode!=='spike'||!spikeState||myPlayer.isDead)return;
+ if(isHost){const ok=type==='buy'?spikeMatch.buy(myPlayer,value):type==='sell'?spikeMatch.sell(myPlayer,value):spikeMatch.switch(myPlayer,value);spikeState=spikeMatch.snapshot();spikeApply(spikeState);if(typeof GameAudio!=='undefined')GameAudio.emit(ok?'equip':'error');}
+ else broadcastData({type:type==='buy'?'SPIKE_BUY':type==='sell'?'SPIKE_SELL':'SPIKE_SWITCH',player:{id:myPlayer.id},item:value,slot:value,round:spikeState.round,seq:++spikeShopSeq});
 }
+function spikeChoose(weapon){spikeShopAction('buy',weapon);}
+const spikeOriginalKill=addKill;
+addKill=id=>{spikeOriginalKill(id);if(selectedMode==='spike'&&isHost)spikeMatch?.rewardKill(id);};
+const spikeOldInventory=toggleInventory;
+toggleInventory=()=>{if(selectedMode==='spike')return spikeToggleShop();return spikeOldInventory();};
+const spikeOldUnequip=unequipWeapon;
+unequipWeapon=()=>{if(selectedMode!=='spike')spikeOldUnequip();};
 const originalSelect=selectDeathmatchWeapon;
 selectDeathmatchWeapon=type=>selectedMode==='spike'?spikeChoose(type):originalSelect(type);
 const originalUpdateAI=updateAI;
@@ -112,10 +128,12 @@ updateAI=()=>{
 const originalUpdate=update;
 update=()=>{
  if(selectedMode!=='spike'||!gameStarted||gameEnded)return originalUpdate();
+ if(spikeShopOpen){myPlayer.isShooting=false;myPlayer.isAiming=false;mobileMoveVec.x=0;mobileMoveVec.y=0;for(const k of ['w','a','s','d'])keys[k]=false;}
  const now=performance.now(),dt=Math.min(.1,(now-spikeLastTick)/1000);spikeLastTick=now;spikeFrameDt=Math.max(0,Math.min(.05,dt));
  myPlayer._spikeUse=spikeHeld;
  if(spikeState?.phase==='prep'||['end','finished'].includes(spikeState?.phase)||spikeHeld)myPlayer.isShooting=false;
  originalUpdate();
+ if(isHost&&spikeMatch?.phase==='prep')for(const bot of aiBots)if(bot._boughtRound!==spikeMatch.round){bot._boughtRound=spikeMatch.round;for(const id of ['v_vandal','v_spectre','v_ghost'])if(spikeMatch.buy(bot,id))break;spikeMatch.buy(bot,bot.credits>=1000?'heavy':'light');}
  if(spikeState?.phase==='prep'){const r=spikeSpawn(myPlayer);myPlayer.x=Math.max(r.x+20,Math.min(r.x+r.w-20,myPlayer.x));myPlayer.y=Math.max(r.y+20,Math.min(r.y+r.h-20,myPlayer.y));}
  if(isHost&&spikeMatch){for(const p of Object.values(remotePlayers))if(Date.now()-(p._inputAt||0)>700)p._spikeUse=false;const prev=spikeMatch.round;spikeMatch.tick(dt);spikeState=spikeMatch.snapshot();if(['end','finished'].includes(spikeState.phase))bullets.length=0;if(prev!==spikeMatch.round)spikeApply(spikeState);}
  spikeUI();
@@ -123,7 +141,8 @@ update=()=>{
 };
 const spikePanel=document.createElement('div');spikePanel.id='spikePanel';
 spikePanel.style.cssText='position:absolute;top:65px;left:50%;transform:translateX(-50%);z-index:48;text-align:center;background:#101821dd;border:1px solid #5aaeb6;border-radius:8px;padding:8px 12px;color:white;max-width:75%;display:none;font-size:13px;pointer-events:none';
-spikePanel.innerHTML='<div id="spikeStatus"></div><div id="spikeWeaponBar" style="pointer-events:auto;margin-top:6px"><span>총기 선택 </span><button style="width:auto;padding:7px 9px;margin:2px;font-size:12px" onclick="spikeChoose(\'ar\')">돌격소총</button><button style="width:auto;padding:7px 9px;margin:2px;font-size:12px" onclick="spikeChoose(\'sniper\')">저격총</button><button style="width:auto;padding:7px 9px;margin:2px;font-size:12px" onclick="spikeChoose(\'shotgun\')">산탄총</button></div><div id="spikePrompt" style="color:#ffda83;margin-top:4px"></div>';
+spikePanel.innerHTML='<div id="spikeStatus"></div><div id="spikeWeaponBar" style="pointer-events:auto;margin-top:6px"><button style="width:auto;padding:7px 18px;margin:2px" onclick="spikeToggleShop()">B · 장비 구매</button></div><div id="spikeEconomy" style="color:#e8bd69;margin:5px"></div><div style="pointer-events:auto"><button style="width:auto;padding:5px 10px" onclick="spikeShopAction(\'switch\',\'primary\')">1 · 주무기</button> <button style="width:auto;padding:5px 10px" onclick="spikeShopAction(\'switch\',\'secondary\')">2 · 보조무기</button></div><div id="spikePrompt" style="color:#ffda83;margin-top:4px"></div>';
+
 gameFrame.appendChild(spikePanel);
 const spikeButton=document.createElement('div');spikeButton.id='btnSpike';spikeButton.className='mobile-btn touch-zone';spikeButton.textContent='설치 / 해체';spikeButton.style.cssText='bottom:270px;right:40px;width:85px;border-color:#ffcc66;display:none;touch-action:none';document.getElementById('mobileControls').appendChild(spikeButton);
 let spikeTouch=null;
@@ -168,14 +187,15 @@ function updateSpikeAction(){
  document.getElementById('spikeActionSaved').textContent=defuse?(b.defuseCheckpoint>=3.5?'반해체 완료 · 50% 저장됨':'중앙 지점 도달 시 50% 저장'):active?'이동하거나 손을 떼면 설치 취소':'';
 }
 function spikeUI(){
- spikeRoundBanner();updateSpikeAction();
+ spikeRoundBanner();updateSpikeAction();if(typeof spikeShopRefresh==='function')spikeShopRefresh();
  document.getElementById('btnSprint').style.display=selectedMode==='spike'?'none':'';
  if(selectedMode==='spike')mobileSprintHeld=false;
  const active=selectedMode==='spike'&&gameStarted&&!gameEnded&&spikeState;spikePanel.style.display=active?'block':'none';spikeButton.style.display=active&&isMobile?'flex':'none';if(!active)return;
  const s=spikeState,b=s.bomb,attacking=myPlayer.teamId===`team_${s.attackTeam}`;
  document.getElementById('spikeStatus').textContent=`어센트 · ${s.round}라운드 | 청록 ${s.score[0]} : ${s.score[1]} 코랄 | ${attacking?'공격':'수비'} | ${s.phase==='prep'?'준비':s.phase==='planted'?'폭발까지':['end','finished'].includes(s.phase)?s.result:'라운드'} ${Math.max(0,Math.ceil(s.time))}초`;
+ document.getElementById('spikeEconomy').textContent=`¤ ${myPlayer.credits||0} · HP ${Math.ceil(myPlayer.hp)} · 방어구 ${Math.ceil(myPlayer.shield||0)}${myPlayer.shieldType==='regen'?' / 재생 '+Math.ceil(myPlayer.shieldPool||0):''}`;
  const prep=s.phase==='prep'&&!myPlayer.isDead;document.getElementById('spikeWeaponBar').style.display=prep?'block':'none';
- let hint=prep?'스폰 지역에서 총기를 바꿀 수 있습니다. 준비 후 출발하세요.':['end','finished'].includes(s.phase)?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
+ let hint=prep?'B / 구매 버튼 · 스폰에서 장비 구매 · 1 주무기 / 2 보조무기':['end','finished'].includes(s.phase)?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
  if(b.planted&&b.defuseCheckpoint>=3.5)hint+=' · 반해체 완료 (50% 저장)';
 
  document.getElementById('spikePrompt').textContent=hint;
