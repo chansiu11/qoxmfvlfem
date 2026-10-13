@@ -65,7 +65,7 @@
   team(p){return p.teamId==='team_2'?2:1;}
   spawn(p){return SPAWNS[this.team(p)===this.attackTeam?0:1];}
   begin(){
-   this.round++;this.attackTeam=this.round%2?1:2;this.phase='prep';this.time=15;this.result='';this.actor=null;this.progress=0;this.anchor=null;
+   this.round++;this.attackTeam=this.round%2?1:2;this.phase='prep';this.time=15;this.result='';this.winnerTeam=null;this.actor=null;this.progress=0;this.anchor=null;
    const indexes=[0,0];this.spawns={};
    for(const p of this.actors()){
     if(p.spectator)continue;const team=this.team(p),r=this.spawn(p),i=indexes[team-1]++;
@@ -81,9 +81,10 @@
    this.bomb={carrier:carrier?.id||null,x:carrier?.x||250,y:carrier?.y||1200,planted:false,site:null,timer:45,defuseCheckpoint:0};
   }
   choose(p,weapon){if(this.phase!=='prep'||!alive(p)||!inside(p,this.spawn(p))||!['ar','sniper','shotgun'].includes(weapon))return false;p.weapon=weapon;p.clipAmmo={ar:30,sniper:5,shotgun:8}[weapon];p.reserveAmmo=p.clipAmmo*4;p.isReloading=false;return true;}
-  finish(team,reason){if(!['live','planted'].includes(this.phase))return;this.score[team-1]++;this.phase='end';this.time=6;this.result=reason;this.progress=0;this.actor=null;for(const p of this.actors()){p.isShooting=false;p._spikeUse=false;}}
+  finish(team,reason){if(!['live','planted'].includes(this.phase))return;this.score[team-1]++;this.winnerTeam=team;this.phase=this.score[team-1]>=13?'finished':'end';this.time=this.phase==='finished'?10:6;this.result=reason;this.progress=0;this.actor=null;for(const p of this.actors()){p.isShooting=false;p._spikeUse=false;}}
   tick(dt){
    dt=Math.max(0,Math.min(.1,dt));this.time-=dt;
+   if(this.phase==='finished')return;
    if(this.phase==='end'){if(this.time<=0)this.begin();return;}
    if(this.phase==='prep'){
     for(const p of this.actors())if(alive(p)){const r=this.spawn(p);p.x=Math.max(r.x+20,Math.min(r.x+r.w-20,p.x));p.y=Math.max(r.y+20,Math.min(r.y+r.h-20,p.y));p.isShooting=false;}
@@ -113,7 +114,7 @@
    else if(!defenders.length)this.finish(this.attackTeam,'수비팀 전멸 · 공격 승리');
    else if(this.time<=0)this.finish(3-this.attackTeam,'시간 초과 · 수비 승리');
   }
-  snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo}))};}
+  snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo}))};}
  }
  root.SpikeRules={Match,SIZE,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

@@ -143,7 +143,7 @@
     if(state.actor&&state.actor!==previous.actor&&(s.bomb.planted||myPlayer.teamId===`team_${s.attackTeam}`))emit('use',s.bomb?.planted?s.bomb:getCombatEntityById(state.actor));
     if(state.half>previous.half)emit('half',s.bomb);
     if(previous.actor===myPlayer.id&&!state.actor&&state.phase===previous.phase)emit('cancel');
-    if(state.phase==='end'&&previous.phase!=='end')emit(s.result.includes('폭발')?'explode':s.result.includes('해체')?'defuse':'end');
+    if(['end','finished'].includes(state.phase)&&!['end','finished'].includes(previous.phase))emit(s.result.includes('폭발')?'explode':s.result.includes('해체')?'defuse':'end');
    }
    if(state.ended&&!previous.ended)emit('end');
   }

@@ -6,14 +6,23 @@ const originalMap=generateMapData;
 generateMapData=(mode,seed)=>mode==='spike'?{seed,worldSize:SpikeRules.SIZE,obstacles:SpikeRules.WALLS.map(w=>({...w})),items:[]}:originalMap(mode,seed);
 const originalTeam=applyEntityTeam;
 applyEntityTeam=p=>{if(selectedMode!=='spike')return originalTeam(p);p.teamId=isAssignedSpectator(p.id)?null:`team_${teamAssignments[p.id]===2?2:1}`;p.team=null;return p;};
+const oldNormalizeTeams=normalizeRoomTeams;
+normalizeRoomTeams=(roster=roomTeamRoster())=>{
+ if(selectedMode!=='spike')return oldNormalizeTeams(roster);
+ const counts=[0,0];for(const p of roster)if(!isAssignedSpectator(p.id)&&[1,2].includes(teamAssignments[p.id]))counts[teamAssignments[p.id]-1]++;
+ for(const p of roster){if(!isAssignedSpectator(p.id)&&![1,2].includes(teamAssignments[p.id])){const t=counts[0]<=counts[1]?1:2;teamAssignments[p.id]=t;counts[t-1]++;}applyEntityTeam(p);}
+};
+const oldSetRoomTeam=setRoomTeam;
+setRoomTeam=(id,value)=>{if(selectedMode!=='spike')return oldSetRoomTeam(id,value);const t=Number(value);if(!isHost||gameStarted||isAssignedSpectator(id)||![1,2].includes(t)||!roomTeamRoster().some(p=>p.id===id))return false;teamAssignments[id]=t;publishRoomRoles();return true;};
 const originalPrepare=prepareMatchTeams;
-prepareMatchTeams=()=>{if(selectedMode!=='spike')return originalPrepare();spikeActors().forEach((p,i)=>{teamAssignments[p.id]=i%2+1;applyEntityTeam(p);});initialTeamCount=2;};
+prepareMatchTeams=()=>{if(selectedMode!=='spike')return originalPrepare();normalizeRoomTeams(spikeActors());spikeActors().forEach(applyEntityTeam);initialTeamCount=2;};
 const originalStartRequest=hostStartGame;
 hostStartGame=()=>{
  if(document.getElementById('gameModeSelect').value==='spike'){
   const bots=document.getElementById('aiToggle').value==='true'?Number(document.getElementById('aiCountInput').value)||0:0;
   if(roomHumans().filter(p=>!isAssignedSpectator(p.id)).length+bots<2){alert('일반게임은 양 팀에 참가자가 필요합니다. 다른 플레이어를 초대하거나 봇을 추가해 주세요.');return;}
  }
+ if(document.getElementById('gameModeSelect').value==='spike'){selectedMode='spike';normalizeRoomTeams();const teams=new Set(roomTeamRoster().filter(p=>!isAssignedSpectator(p.id)).map(p=>teamAssignments[p.id]));if(teams.size<2){alert('양 팀에 최소 한 명씩 배정해 주세요.');return;}}
  originalStartRequest();
 };
 const originalStart=startGame;
@@ -29,7 +38,7 @@ openDeathmatchWeaponModal=(...args)=>{if(selectedMode!=='spike')return originalW
 const originalBotRespawn=respawnBot;
 respawnBot=p=>{if(selectedMode!=='spike')originalBotRespawn(p);};
 const originalShoot=shoot;
-shoot=(p,spread)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;return originalShoot(p,spread);};
+shoot=(p,spread,shotId)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;return originalShoot(p,spread,shotId);};
 const originalEntity=networkEntityState;
 networkEntityState=p=>{const state=originalEntity(p);if(selectedMode==='spike'){state._spikeUse=p===myPlayer?spikeHeld:!!p._spikeUse;state._spikeRound=spikeAppliedRound;}return state;};
 const originalSend=safeSend;
@@ -103,11 +112,12 @@ update=()=>{
  if(selectedMode!=='spike'||!gameStarted||gameEnded)return originalUpdate();
  const now=performance.now(),dt=Math.min(.1,(now-spikeLastTick)/1000);spikeLastTick=now;
  myPlayer._spikeUse=spikeHeld;
- if(spikeState?.phase==='prep'||spikeState?.phase==='end'||spikeHeld)myPlayer.isShooting=false;
+ if(spikeState?.phase==='prep'||['end','finished'].includes(spikeState?.phase)||spikeHeld)myPlayer.isShooting=false;
  originalUpdate();
  if(spikeState?.phase==='prep'){const r=spikeSpawn(myPlayer);myPlayer.x=Math.max(r.x+20,Math.min(r.x+r.w-20,myPlayer.x));myPlayer.y=Math.max(r.y+20,Math.min(r.y+r.h-20,myPlayer.y));}
- if(isHost&&spikeMatch){for(const p of Object.values(remotePlayers))if(Date.now()-(p._inputAt||0)>700)p._spikeUse=false;const prev=spikeMatch.round;spikeMatch.tick(dt);spikeState=spikeMatch.snapshot();if(spikeState.phase==='end')bullets.length=0;if(prev!==spikeMatch.round)spikeApply(spikeState);}
+ if(isHost&&spikeMatch){for(const p of Object.values(remotePlayers))if(Date.now()-(p._inputAt||0)>700)p._spikeUse=false;const prev=spikeMatch.round;spikeMatch.tick(dt);spikeState=spikeMatch.snapshot();if(['end','finished'].includes(spikeState.phase))bullets.length=0;if(prev!==spikeMatch.round)spikeApply(spikeState);}
  spikeUI();
+ if(isHost&&spikeState?.phase==='finished'&&spikeState.time<=0)returnToRoomAfterGame();
 };
 const spikePanel=document.createElement('div');spikePanel.id='spikePanel';
 spikePanel.style.cssText='position:absolute;top:65px;left:50%;transform:translateX(-50%);z-index:48;text-align:center;background:#101821dd;border:1px solid #5aaeb6;border-radius:8px;padding:8px 12px;color:white;max-width:75%;display:none;font-size:13px;pointer-events:none';
@@ -121,14 +131,29 @@ window.addEventListener('keydown',e=>{if(selectedMode==='spike'&&e.key.toLowerCa
 window.addEventListener('keyup',e=>{if(e.key.toLowerCase()==='f')spikeHeld=false;});
 window.addEventListener('blur',()=>{spikeHeld=false;spikeTouch=null;});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){spikeHeld=false;spikeTouch=null;}});
+const spikeBanner=document.createElement('div');spikeBanner.id='spikeBanner';spikeBanner.style.cssText='position:absolute;left:50%;top:29%;transform:translateX(-50%);z-index:70;width:min(600px,88%);text-align:center;padding:20px 12px;border-top:3px solid #66e4d0;background:linear-gradient(90deg,transparent,#101923f2 15%,#101923f2 85%,transparent);color:white;pointer-events:none;display:none';spikeBanner.setAttribute('aria-live','polite');gameFrame.appendChild(spikeBanner);
+let spikeBannerKey='',spikeBannerUntil=0;
+function spikeRoundBanner(){
+ const s=spikeState;if(selectedMode!=='spike'||!gameStarted||!s){spikeBanner.style.display='none';spikeBannerKey='';return;}
+ const key=s.round+':'+s.phase,now=performance.now();if(key!==spikeBannerKey){spikeBannerKey=key;spikeBannerUntil=now+(s.phase==='live'?2200:s.phase==='planted'?2400:Infinity);}
+ if(now>spikeBannerUntil){spikeBanner.style.display='none';return;}
+ const observer=isAssignedSpectator(myPlayer.id),win=myPlayer.teamId===`team_${s.winnerTeam}`;
+ let title='',sub='',color='#66e4d0';
+ if(s.phase==='prep'){title=s.round===1?'게임 시작 · 준비 시간':`${s.round}라운드 준비`;sub=`${Math.ceil(Math.max(0,s.time))}초 후 시작 · 스폰에서 총기 선택 · 13점 선승`;}
+ if(s.phase==='live'){title='라운드 시작';sub=myPlayer.teamId===`team_${s.attackTeam}`?'공격 · A/B에 스파이크를 설치하세요':'수비 · 설치를 막고 스파이크를 해체하세요';}
+ if(s.phase==='planted'){title='스파이크 설치됨';sub=`${s.bomb.site} 지점 · 폭발까지 ${Math.ceil(s.time)}초`;color='#ffc56a';}
+ if(['end','finished'].includes(s.phase)){title=(s.phase==='finished'?'게임 종료 · ':'라운드 ')+(observer?`팀 ${s.winnerTeam} 승리`:win?'승리':'패배');color=observer||win?'#66e4d0':'#ff7684';sub=`${s.result} · ${s.score[0]} : ${s.score[1]} · ${Math.ceil(Math.max(0,s.time))}초 후 ${s.phase==='finished'?'대기실 복귀':'다음 라운드'}`;}
+ spikeBanner.style.display=title?'block':'none';spikeBanner.style.borderColor=color;spikeBanner.innerHTML=`<div style="font-size:clamp(23px,4vw,40px);font-weight:900;color:${color}">${title}</div><div style="margin-top:9px;font-size:14px">${sub}</div>`;
+}
 function spikeUI(){
+ spikeRoundBanner();
  document.getElementById('btnSprint').style.display=selectedMode==='spike'?'none':'';
  if(selectedMode==='spike')mobileSprintHeld=false;
  const active=selectedMode==='spike'&&gameStarted&&!gameEnded&&spikeState;spikePanel.style.display=active?'block':'none';spikeButton.style.display=active&&isMobile?'flex':'none';if(!active)return;
  const s=spikeState,b=s.bomb,attacking=myPlayer.teamId===`team_${s.attackTeam}`;
- document.getElementById('spikeStatus').textContent=`어센트 · ${s.round}라운드 | 청록 ${s.score[0]} : ${s.score[1]} 코랄 | ${attacking?'공격':'수비'} | ${s.phase==='prep'?'준비':s.phase==='planted'?'폭발까지':s.phase==='end'?s.result:'라운드'} ${Math.max(0,Math.ceil(s.time))}초`;
+ document.getElementById('spikeStatus').textContent=`어센트 · ${s.round}라운드 | 청록 ${s.score[0]} : ${s.score[1]} 코랄 | ${attacking?'공격':'수비'} | ${s.phase==='prep'?'준비':s.phase==='planted'?'폭발까지':['end','finished'].includes(s.phase)?s.result:'라운드'} ${Math.max(0,Math.ceil(s.time))}초`;
  const prep=s.phase==='prep'&&!myPlayer.isDead;document.getElementById('spikeWeaponBar').style.display=prep?'block':'none';
- let hint=prep?'스폰 지역에서 총기를 바꿀 수 있습니다. 준비 후 출발하세요.':s.phase==='end'?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
+ let hint=prep?'스폰 지역에서 총기를 바꿀 수 있습니다. 준비 후 출발하세요.':['end','finished'].includes(s.phase)?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
  if(b.planted&&b.defuseCheckpoint>=3.5)hint+=' · 반해체 완료 (50% 저장)';
  if(s.actor&&(b.planted||attacking))hint+=` · ${Math.round(s.progress/(b.planted?7:4)*100)}%`;
  document.getElementById('spikePrompt').textContent=hint;

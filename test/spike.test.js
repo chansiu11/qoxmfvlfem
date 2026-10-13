@@ -104,3 +104,25 @@ test('enemy bullet visibility follows wall occlusion and spectated viewpoint onl
  h.run(`isSpectating=true;spectateTarget={id:'ally',teamId:'team_1',x:150,y:0}`);assert.equal(h.run('spikeBulletVisible(tracer)'),true);
  h.run(`isSpectating=false;selectedMode='normal'`);assert.equal(h.run('spikeBulletVisible(tracer)'),true);
 });
+test('host can assign general-mode teams and assignments survive normalization and match start',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='host';remotePlayers.guest={...myPlayer,id:'guest'};document.getElementById('aiToggle').value='false';document.getElementById('aiCountInput').value='0';normalizeRoomTeams();`);
+ assert(h.run("setRoomTeam('host',2)"));assert(h.run("setRoomTeam('guest',1)"));h.run('normalizeRoomTeams();prepareMatchTeams()');
+ assert.equal(h.run('myPlayer.teamId'),'team_2');assert.equal(h.run('remotePlayers.guest.teamId'),'team_1');
+ h.run('isHost=false');assert.equal(h.run("setRoomTeam('host',1)"),false);h.run('isHost=true;gameStarted=true');assert.equal(h.run("setRoomTeam('host',1)"),false);
+});
+test('general match final victory stops round restart and presents winner/loser UI',()=>{
+ const {m}=live();m.score[0]=12;m.finish(1,'수비팀 전멸 · 공격 승리');assert.equal(m.phase,'finished');assert.equal(m.winnerTeam,1);tick(m,11);assert.equal(m.round,1);
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;myPlayer.teamId='team_1';spikeState=${JSON.stringify(m.snapshot())};spikeUI();`);assert(h.run("spikeBanner.innerHTML.includes('게임 종료 · 승리')"));
+ h.run(`myPlayer.teamId='team_2';spikeUI()`);assert(h.run("spikeBanner.innerHTML.includes('게임 종료 · 패배')"));
+ h.run(`spikeState.phase='prep';spikeState.round=1;spikeState.time=15;spikeUI()`);assert(h.run("spikeBanner.innerHTML.includes('게임 시작')"));
+});
+test('guest bullets move between packets, reconcile by pellet id, and stop at walls without damage',()=>{
+ const h=harness();h.run(`isHost=false;obstacles=[];myPlayer.hp=200;globalThis.packet=[{bulletId:'shot:0',shotId:'shot',ownerId:'enemy',x:100,y:100,prevX:90,prevY:100,dx:10,dy:0}];applyBulletSnapshot(packet);globalThis.bulletClock=performance.now();guestBulletFrameAt=bulletClock;updateGuestBullets(bulletClock+16);`);
+ const x=h.run('bullets[0].x');assert(x>100);h.run('updateGuestBullets(bulletClock+32)');assert(h.run('bullets[0].x')>x);
+ h.run('applyBulletSnapshot(packet,true)');assert.equal(h.run('bullets.length'),1);const ahead=h.run('bullets[0].x');h.run('updateGuestBullets(bulletClock+48)');assert(h.run('bullets[0].x')>=ahead);
+ h.run('checkBulletPathObstacleCollision=()=>true;updateGuestBullets(bulletClock+64)');assert.equal(h.run('bullets.length'),0);assert.equal(h.run('myPlayer.hp'),200);
+});
+test('host emits immediate pellet spawn event and guest local shot ids are retained',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='normal';myPlayer.id='host';myPlayer.weapon='shotgun';myPlayer.clipAmmo=5;myPlayer.isDead=false;globalThis.events=[];broadcastData=p=>events.push(p);shoot(myPlayer,0,'host_test');`);
+ assert(h.run("events.some(p=>p.type==='BULLET_SPAWN')"));assert(h.run("events.find(p=>p.type==='BULLET_SPAWN').bullets.every(b=>b.shotId==='host_test'&&Number.isFinite(b.dx))"));assert.equal(h.run('new Set(bullets.map(b=>b.bulletId)).size'),h.run('bullets.length'));
+});
