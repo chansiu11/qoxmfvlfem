@@ -241,3 +241,23 @@ test('general scoped guns look farther ahead while other modes and short-range g
  const difference=h.run("(()=>{myPlayer.weapon='v_operator';camera.x=myPlayer.x;camera.y=myPlayer.y;originalUpdate();const far=camera.x-myPlayer.x;myPlayer.weapon='v_bucky';camera.x=myPlayer.x;camera.y=myPlayer.y;originalUpdate();return far-(camera.x-myPlayer.x)})()");
  assert(difference>0,'sniper must show more of the aimed direction than a shotgun');
 });
+
+test('Ascent attacker and defender spawn callouts anchor five clear, separate buy positions',()=>{
+ const {Match,SPAWNS,SPAWN_ANCHORS,WALLS}=globalThis.SpikeRules;
+ const players=Array.from({length:10},(_,i)=>({id:'player_'+i,teamId:i<5?'team_1':'team_2',hp:100}));
+ const match=new Match(()=>players);
+ assert(Math.hypot(SPAWN_ANCHORS[0].x/7.5-364,SPAWN_ANCHORS[0].y/7.5-117)<1);
+ assert(Math.hypot(SPAWN_ANCHORS[1].x/7.5-278,SPAWN_ANCHORS[1].y/7.5-556)<1);
+ for(let side=0;side<2;side++){
+  const team=players.slice(side*5,side*5+5),spawn=SPAWNS[side];
+  assert.equal(team[0].x,SPAWN_ANCHORS[side].x);assert.equal(team[0].y,SPAWN_ANCHORS[side].y);
+  for(const p of team){
+   assert(globalThis.SpikeRules.inside(p,spawn));
+   assert(!WALLS.some(w=>p.x+15>w.x&&p.x-15<w.x+w.w&&p.y+15>w.y&&p.y-15<w.y+w.h),`spawn collision for ${p.id}`);
+  }
+  assert.equal(new Set(team.map(p=>`${p.x},${p.y}`)).size,5);
+ }
+ match.phase='end';match.time=0;match.tick(.05);
+ assert.equal(players[0].x,SPAWN_ANCHORS[1].x);
+ assert.equal(players[5].x,SPAWN_ANCHORS[0].x);
+});

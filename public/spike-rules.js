@@ -20,11 +20,16 @@
  const SCALE=SIZE/640;
  const rect=([x,y,w,h])=>({x:x*SCALE,y:y*SCALE,w:w*SCALE,h:h*SCALE});
  const MAP_NAME='어센트 · ASCENT';
- const SPAWNS=[[344,116,80,64],[260,528,64,56]].map(rect);
+ // Official Ascent callout coordinates, rotated counterclockwise to match this map.
+ // Riot map metadata: x' = 640*(-0.00007*worldX + 0.573242),
+ // y' = 640*(1 - (0.00007*worldY + 0.813895)).
+ const SPAWN_ANCHORS=[{x:364*SCALE,y:117*SCALE},{x:278*SCALE,y:556*SCALE}];
+ // Buy zones are the walkable rooms surrounding those callouts, not arbitrary map boxes.
+ const SPAWNS=[[336,96,96,96],[240,508,92,80]].map(rect);
  const SITES=[{name:'A',x:128*SCALE,y:424*SCALE,r:32*SCALE},{name:'B',x:496*SCALE,y:440*SCALE,r:34*SCALE}];
  const FLOORS=[
   // Attacker spawn and the split toward A lobby / B lobby.
-  [336,48,60,64],[336,108,96,84],[212,136,220,44],[220,176,24,48],
+  [336,48,60,64],[396,96,36,12],[336,108,96,84],[212,136,220,44],[220,176,24,48],
   [408,176,24,112],[408,248,84,80],[464,320,28,60],
   // A lobby, A main and the wine pocket.
   [168,200,48,112],[184,300,28,40],[64,316,148,24],[80,336,92,120],
@@ -40,7 +45,7 @@
   // B main, lane, site and boathouse.
   [396,364,84,28],[448,380,32,36],[392,400,144,92],[532,424,36,68],
   // Defender spawn and rotation behind the two sites.
-  [256,500,76,88],[248,508,188,24],[412,456,24,60],[272,472,60,40],[308,448,24,36]
+  [256,500,76,88],[240,508,16,80],[248,508,188,24],[412,456,24,60],[272,472,60,40],[308,448,24,36]
  ].map(rect);
  const COVERS=[
   [108,408,12,12],[144,416,8,24], // A generator / default cover
@@ -84,7 +89,7 @@
  function shieldDamage(p,damage){const a=gear()[p.shieldType],blocked=a?Math.min(p.shield||0,damage*a.absorb):0;p.shield=Math.max(0,(p.shield||0)-blocked);p._shieldDelay=3;return damage-blocked;}
  function bulletDamage(b,p){const w=catalog()[b.weapon];if(!w)return b.damage;const d=Math.hypot(p.x-b.startX,p.y-b.startY)/UNITS_PER_METER;return (w.damageRanges.find(r=>d<r.rangeEndMeters)||w.damageRanges.at(-1)).bodyDamage;}
  const alive=p=>p&&p.hp>0&&!p.isDead&&!p.spectator;
- const inside=(p,r)=>p.x>=r.x+20&&p.x<=r.x+r.w-20&&p.y>=r.y+20&&p.y<=r.y+r.h-20;
+ const inside=(p,r)=>p.x>=r.x+15&&p.x<=r.x+r.w-15&&p.y>=r.y+15&&p.y<=r.y+r.h-15;
  class Match{
   constructor(actors){this.actors=actors;this.round=0;this.score=[0,0];this.phase='prep';this.time=0;this.result='';this.progress=0;this.actor=null;this.begin();}
   team(p){return p.teamId==='team_2'?2:1;}
@@ -94,8 +99,15 @@
    const indexes=[0,0];this.spawns={};
    for(const p of this.actors()){
     if(p.spectator)continue;const team=this.team(p),r=this.spawn(p),i=indexes[team-1]++;
-    const cols=Math.max(1,Math.floor((r.w-40)/55)),rows=Math.max(1,Math.floor((r.h-40)/55));
-    p.x=r.x+35+(i%cols)*55;p.y=r.y+35+(Math.floor(i/cols)%rows)*55;
+    // Start on the map's attacker/defender spawn callout, then spread teammates
+    // across the same room so five players do not appear on one coordinate.
+    const anchor=SPAWN_ANCHORS[this.team(p)===this.attackTeam?0:1];
+    const slots=[anchor];
+    for(let y=r.y+15;y<=r.y+r.h-15;y+=30)for(let x=r.x+15;x<=r.x+r.w-15;x+=30){
+     if(Math.hypot(x-anchor.x,y-anchor.y)>=30)slots.push({x,y});
+    }
+    slots.splice(1,slots.length-1,...slots.slice(1).sort((a,b)=>Math.hypot(a.x-anchor.x,a.y-anchor.y)-Math.hypot(b.x-anchor.x,b.y-anchor.y)));
+    const spot=slots[i%slots.length];p.x=spot.x;p.y=spot.y;
     const lost=p.isDead||p.hp<=0||this.round===1||!p.loadout;
     if(this.round===1){p.credits=800;p.lossStreak=0;}
     if(lost){p.loadout={primary:null,secondary:fresh('v_classic')};p.shieldType=null;p.shield=0;p.shieldPool=0;}
@@ -137,7 +149,7 @@
    if(this.phase==='finished')return;
    if(this.phase==='end'){if(this.time<=0)this.begin();return;}
    if(this.phase==='prep'){
-    for(const p of this.actors())if(alive(p)){const r=this.spawn(p);p.x=Math.max(r.x+20,Math.min(r.x+r.w-20,p.x));p.y=Math.max(r.y+20,Math.min(r.y+r.h-20,p.y));p.isShooting=false;}
+    for(const p of this.actors())if(alive(p)){const r=this.spawn(p);p.x=Math.max(r.x+15,Math.min(r.x+r.w-15,p.x));p.y=Math.max(r.y+15,Math.min(r.y+r.h-15,p.y));p.isShooting=false;}
     if(this.time<=0){this.phase='live';this.time=100;}return;
    }
    const players=this.actors(),b=this.bomb;
@@ -167,5 +179,5 @@
   }
   snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo,maxHp:p.maxHp,credits:p.credits,shield:p.shield,shieldType:p.shieldType,shieldPool:p.shieldPool,activeSlot:p.activeSlot,loadout:copy(p.loadout),purchases:copy(p.purchases)}))};}
  }
- root.SpikeRules={weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
+ root.SpikeRules={weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SPAWN_ANCHORS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

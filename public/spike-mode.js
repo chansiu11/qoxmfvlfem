@@ -134,7 +134,7 @@ update=()=>{
  if(spikeState?.phase==='prep'||['end','finished'].includes(spikeState?.phase)||spikeHeld)myPlayer.isShooting=false;
  originalUpdate();
  if(isHost&&spikeMatch?.phase==='prep')for(const bot of aiBots)if(bot._boughtRound!==spikeMatch.round){bot._boughtRound=spikeMatch.round;for(const id of ['v_vandal','v_spectre','v_ghost'])if(spikeMatch.buy(bot,id))break;spikeMatch.buy(bot,bot.credits>=1000?'heavy':'light');}
- if(spikeState?.phase==='prep'){const r=spikeSpawn(myPlayer);myPlayer.x=Math.max(r.x+20,Math.min(r.x+r.w-20,myPlayer.x));myPlayer.y=Math.max(r.y+20,Math.min(r.y+r.h-20,myPlayer.y));}
+ if(spikeState?.phase==='prep'){const r=spikeSpawn(myPlayer);myPlayer.x=Math.max(r.x+15,Math.min(r.x+r.w-15,myPlayer.x));myPlayer.y=Math.max(r.y+15,Math.min(r.y+r.h-15,myPlayer.y));}
  if(isHost&&spikeMatch){for(const p of Object.values(remotePlayers))if(Date.now()-(p._inputAt||0)>700)p._spikeUse=false;const prev=spikeMatch.round;spikeMatch.tick(dt);spikeState=spikeMatch.snapshot();if(['end','finished'].includes(spikeState.phase))bullets.length=0;if(prev!==spikeMatch.round)spikeApply(spikeState);}
  spikeUI();
  if(isHost&&spikeState?.phase==='finished'&&spikeState.time<=0)returnToRoomAfterGame();
@@ -212,7 +212,7 @@ function drawSpikeFloor(context){
 }
 function drawSpikeMap(context,scale=1){
  if(selectedMode!=='spike')return;context.save();context.scale(scale,scale);context.textAlign='center';context.textBaseline='middle';
- for(let i=0;i<2;i++){const r=SpikeRules.SPAWNS[i];context.fillStyle=i?'#4d708533':'#af784333';context.fillRect(r.x,r.y,r.w,r.h);context.strokeStyle=i?'#77beed':'#ffc270';context.lineWidth=3;context.strokeRect(r.x,r.y,r.w,r.h);context.fillStyle='white';context.font='bold 25px sans-serif';context.fillText(i?'수비 스폰':'공격 스폰',r.x+r.w/2,r.y+r.h/2);}
+ for(let i=0;i<2;i++){const r=SpikeRules.SPAWNS[i];context.fillStyle=i?'#4d708533':'#af784333';context.fillRect(r.x,r.y,r.w,r.h);context.strokeStyle=i?'#77beed':'#ffc270';context.lineWidth=3;context.strokeRect(r.x,r.y,r.w,r.h);context.fillStyle='white';context.font='bold 25px sans-serif';context.fillText(i?'수비 스폰':'공격 스폰',SpikeRules.SPAWN_ANCHORS[i].x,SpikeRules.SPAWN_ANCHORS[i].y);}
  if(scale>=.2){context.fillStyle='#e8dfce';context.font='bold 22px sans-serif';for(const c of SpikeRules.CALLOUTS)context.fillText(c.name,c.x,c.y);}
  for(const s of SpikeRules.SITES){context.fillStyle='#dbb45422';context.strokeStyle='#ffce67';context.beginPath();context.arc(s.x,s.y,s.r,0,Math.PI*2);context.fill();context.stroke();context.fillStyle='#ffdb8b';context.font='bold 60px sans-serif';context.fillText(s.name,s.x,s.y);}
  const b=spikeState?.bomb;if(b&&!b.hidden&&(b.planted||myPlayer.teamId===`team_${spikeState.attackTeam}`)){context.fillStyle=b.planted?'#ff5757':'#fff5a9';context.fillRect(b.x-12,b.y-12,24,24);}
