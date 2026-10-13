@@ -3,7 +3,17 @@
  // Metre convention for this 2D adaptation; geometry is approximate, not a 1:1 port.
  const UNITS_PER_METER=40, SIZE=4800;
  const MOVE_MPS=5.4, QUIET_MPS=3.24;
- const movementDistance=(dt,quiet=false)=>(quiet?QUIET_MPS:MOVE_MPS)*UNITS_PER_METER*Math.max(0,Math.min(.05,dt));
+ const weaponSpeed=id=>root.SpikeCatalog?.weapons[id]?.moveMps||MOVE_MPS;
+ const movementDistance=(dt,quiet=false,weapon=null)=>weaponSpeed(weapon)*(quiet?.6:1)*UNITS_PER_METER*Math.max(0,Math.min(.05,dt));
+ function movingSpread(p){
+  const w=root.SpikeCatalog?.weapons[p.weapon];if(!w)return 0;
+  const base=w.spread;if(!p.isMoving)return base;
+  const speed=Number.isFinite(p.moveSpeed)?p.moveSpeed:weaponSpeed(p.weapon)*(p.movementMode==='stealth'?.6:1);
+  const ratio=Math.max(0,Math.min(1,speed/weaponSpeed(p.weapon)));
+  // Walking is one quarter of the full movement penalty; analog input blends continuously.
+  const factor=ratio<=.6?Math.max(0,(ratio-.08)/.52)*.25:.25+(ratio-.6)/.4*.75;
+  return base+w.movingSpreadDegrees*Math.PI/180*factor;
+ }
  // Hand-built 2D adaptation of Riot's official Ascent overhead layout.
  // Reference: https://playvalorant.com/en-gb/maps/#ascent
  // Coordinates below use the 640px reference; runtime geometry is 4800 units.
@@ -157,5 +167,5 @@
   }
   snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo,maxHp:p.maxHp,credits:p.credits,shield:p.shield,shieldType:p.shieldType,shieldPool:p.shieldPool,activeSlot:p.activeSlot,loadout:copy(p.loadout),purchases:copy(p.purchases)}))};}
  }
- root.SpikeRules={equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
+ root.SpikeRules={weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

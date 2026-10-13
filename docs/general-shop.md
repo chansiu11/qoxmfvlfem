@@ -23,3 +23,11 @@ Validation: packed-code VM tests exercise purchase/replay rejection, host/guest 
 
 ## Damage/audio balance revision
 All modes now apply 80% of their previous gun damage, including every catalog distance band and shotgun pellet. Shop damage figures use the same adjusted data. Each of the 20 catalog guns and three legacy weapons has a distinct procedural transient/body/mechanical-tail profile; spatial positioning, occlusion and mute remain unchanged. These are custom synthesized effects, not recordings from Valorant.
+
+## General-mode movement and run-and-gun revision
+
+Imported runSpeedMultiplier from the community weapons endpoint again on 2026-10-13, converting the 6.75 m/s base into held-weapon speed. Speeds range from 5.0625 m/s (Bucky/Judge) through 5.13 (Operator/Ares/Odin), 5.4 (rifles, Sheriff/Shorty/Marshal/Outlaw), to 5.7375 (remaining pistols and SMGs). Shift uses 60% of the held-weapon speed. Human and bot movement budgets use the same weapon table.
+
+Movement spread is explicitly a 2D balance adaptation, not copied original recoil. Each weapon adds a full-cone moving error of 7–28 degrees; rifle baseline Vandal adds 18 degrees, Spectre 8, Operator 28. Walking applies 25% of that movement error; analog speeds interpolate. Actual local displacement is sampled before firing, so pressing against a wall does not count as moving. Remote speed travels with player snapshots. Stationary baseline accuracy is unchanged. A centered Vandal shot with the movement cone has an idealized ~39% intersection probability at 10 m and ~20% at 20 m against radius-25 collision; this geometric calibration is not a real-device playtest. Gameplay motivation: https://playvalorant.com/en-us/news/game-updates/valorant-patch-notes-9-10/ (movement error and relative SMG mobility).
+
+Bucky, Judge and Shorty receive an additional 25% damage reduction across their distance bands, including each pellet. Other modes' original movement/spread/shotgun damage remain unchanged in this revision. Store displays the adjusted damage, movement speed, quiet speed and movement cone.

@@ -205,3 +205,27 @@ test('packed Vandal shot consumes purchased heavy shield and damages HP on host'
  const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;isSpawnSelecting=false;isSpectating=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};hasLineOfSight=()=>true;myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.x=100;myPlayer.y=100;myPlayer.angle=0;myPlayer.weapon='v_vandal';myPlayer.clipAmmo=25;myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isShooting=false;myPlayer.isReloading=false;spikeState={phase:'live'};remotePlayers.enemy={id:'enemy',x:175,y:100,hp:100,maxHp:100,isDead:false,teamId:'team_2',shieldType:'heavy',shield:50,weapon:'v_classic'};shoot(myPlayer,0);originalUpdate();`);
  assert.equal(h.run('myPlayer.clipAmmo'),24);assert(Math.abs(h.run('remotePlayers.enemy.shield')-28.88)<1e-6);assert(Math.abs(h.run('remotePlayers.enemy.hp')-89.12)<1e-6);
 });
+test('all catalog guns set frame-independent movement and quiet speeds without affecting deathmatch',()=>{
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=false;isMobile=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};myPlayer.isDead=false;myPlayer.hp=100;keys['d']=true;`);
+ for(const w of Object.values(SpikeCatalog.weapons))for(const fps of [30,60,120])for(const quiet of [false,true]){
+  const distance=h.run(`(()=>{myPlayer.weapon='${w.id}';keys['shift']=${quiet};myPlayer.x=1200;myPlayer.y=1200;spikeFrameDt=1/${fps};for(let i=0;i<${fps};i++)originalUpdate();return myPlayer.x-1200;})()`);
+  assert(Math.abs(distance-w.moveMps*40*(quiet?.6:1))<1e-6,`${w.id} ${fps} ${quiet}`);
+ }
+ h.run(`selectedMode='normal';keys['shift']=false;myPlayer.weapon='shotgun';myPlayer.x=1200;originalUpdate()`);assert.equal(h.run('myPlayer.x'),1203);
+ h.run(`selectedMode='spike';myPlayer.weapon='v_vandal';checkObstacleCollision=()=>true;originalUpdate()`);assert.equal(h.run('myPlayer.isMoving'),false);assert.equal(h.run('myPlayer.moveSpeed'),0);
+ assert.equal(SpikeCatalog.weapons.v_bucky.damage,10.2);assert.equal(SpikeCatalog.weapons.v_judge.damage,10.2);assert.equal(SpikeCatalog.weapons.v_shorty.damage,6.6);
+});
+test('run-and-gun spread matches 2D collision scale, walking is intermediate, actual shots use it only in general',()=>{
+ const w=SpikeCatalog.weapons.v_vandal;
+ const stationary=SpikeRules.movingSpread({weapon:w.id,isMoving:false});
+ const walking=SpikeRules.movingSpread({weapon:w.id,isMoving:true,movementMode:'stealth'});
+ const moving=SpikeRules.movingSpread({weapon:w.id,isMoving:true,movementMode:'walk'});
+ assert.equal(stationary,w.spread);assert(stationary<walking&&walking<moving);
+ const chance=(spread,range)=>Math.min(1,2*Math.atan2(25,range)/spread);
+ assert(chance(moving,400)>.35&&chance(moving,400)<.45,'10 m running rifle gives roughly 40% centered hits against radius 25');
+ assert(chance(moving,800)<.25);assert(chance(walking,400)>.95);
+ assert(SpikeRules.movingSpread({weapon:'v_spectre',isMoving:true})<moving);
+ const h=harness();h.run(`isHost=true;myPlayer.id='me';myPlayer.weapon='v_vandal';myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isReloading=false;myPlayer.isMoving=true;myPlayer.movementMode='walk';myPlayer.angle=0;spikeState={phase:'live'};Math.random=()=>1;`);
+ const angle=mode=>h.run(`selectedMode='${mode}';myPlayer.clipAmmo=10;bullets=[];shoot(myPlayer,0);Math.atan2(bullets[0].dy,bullets[0].dx)`);
+ assert(Math.abs(angle('spike')-moving/2)<1e-9);assert(Math.abs(angle('normal')-w.spread/2)<1e-9);
+});

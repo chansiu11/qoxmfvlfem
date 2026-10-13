@@ -42,7 +42,7 @@ respawnBot=p=>{if(selectedMode!=='spike')originalBotRespawn(p);};
 const originalShoot=shoot;
 shoot=(p,spread,shotId)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p._semiLatch)return;const ammo=p.clipAmmo;const result=originalShoot(p,spread,shotId);if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p.clipAmmo<ammo)p._semiLatch=true;return result;};
 const originalEntity=networkEntityState;
-networkEntityState=p=>{const state=originalEntity(p);if(selectedMode==='spike'){state._spikeUse=p===myPlayer?spikeHeld:!!p._spikeUse;state._spikeRound=spikeAppliedRound;}return state;};
+networkEntityState=p=>{const state=originalEntity(p);if(selectedMode==='spike'){state._spikeUse=p===myPlayer?spikeHeld:!!p._spikeUse;state._spikeRound=spikeAppliedRound;state.moveSpeed=Number.isFinite(p.moveSpeed)?p.moveSpeed:undefined;}return state;};
 const originalSend=safeSend;
 safeSend=(c,data)=>{if(selectedMode==='spike'&&isHost&&data?.type==='SYNC'&&spikeMatch)data={...data,spike:spikeMatch.snapshot(getCombatEntityById(c.playerId)||{teamId:"spectator"})};return originalSend(c,data);};
 function spikeApply(state){
@@ -110,7 +110,7 @@ const originalUpdateAI=updateAI;
 updateAI=()=>{
  if(selectedMode!=='spike')return originalUpdateAI();
  if(!isHost||!['live','planted'].includes(spikeState?.phase))return;
- for(const bot of aiBots)bot._spikeMoveBudget=SpikeRules.movementDistance(spikeFrameDt);
+ for(const bot of aiBots)bot._spikeMoveBudget=SpikeRules.movementDistance(spikeFrameDt,false,bot.weapon);
  originalUpdateAI();
  // Idle bots pursue the objective; combat AI retains priority when enemies are visible.
  const b=spikeMatch.bomb;

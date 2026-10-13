@@ -34,7 +34,7 @@ window.addEventListener('keydown',e=>{
 const shopEscape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function spikeShopInspect(id){
  spikeShopSelected=id;const w=SpikeCatalog.weapons[id],a=SpikeCatalog.armor[id],i=w||a;if(!i)return;
- document.getElementById('shopDetails').innerHTML=`<h3>${i.name}</h3><img src="${i.icon}" alt="${i.name}"><strong>¤ ${i.cost.toLocaleString()}</strong><br>`+(w?`탄창 ${w.maxClip}발 · ${w.fireRate.toFixed(2)}발/초<br>재장전 ${(w.reloadMs/1000).toFixed(2)}초<br>몸통 피해 ${w.damageRanges.map(r=>`${r.rangeStartMeters}m+: ${r.bodyDamage}`).join(' / ')}${w.pellets>1?`<br>산탄 ${w.pellets}발 / 발당 피해`:''}`:`보호막 ${a.capacity}<br>피해 흡수 ${Math.round(a.absorb*100)}%${a.pool?'<br>재생 예비량 50<br>피격 후 3초 뒤 재생':''}`);
+ document.getElementById('shopDetails').innerHTML=`<h3>${i.name}</h3><img src="${i.icon}" alt="${i.name}"><strong>¤ ${i.cost.toLocaleString()}</strong><br>`+(w?`이동 ${w.moveMps.toFixed(2)}m/s · Shift ${(w.moveMps*.6).toFixed(2)}m/s<br>이동 사격 퍼짐 +${w.movingSpreadDegrees}°<br>탄창 ${w.maxClip}발 · ${w.fireRate.toFixed(2)}발/초<br>재장전 ${(w.reloadMs/1000).toFixed(2)}초<br>몸통 피해 ${w.damageRanges.map(r=>`${r.rangeStartMeters}m+: ${r.bodyDamage}`).join(' / ')}${w.pellets>1?`<br>산탄 ${w.pellets}발 / 발당 피해`:''}`:`보호막 ${a.capacity}<br>피해 흡수 ${Math.round(a.absorb*100)}%${a.pool?'<br>재생 예비량 50<br>피격 후 3초 뒤 재생':''}`);
 }
 function spikeShopRefresh(){
  if(selectedMode!=='spike'||!gameStarted||gameEnded||spikeState?.phase!=='prep'||myPlayer.isDead){if(spikeShopOpen)spikeToggleShop(false);return;}
