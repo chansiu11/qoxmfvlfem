@@ -213,7 +213,7 @@ test('all catalog guns set frame-independent movement and quiet speeds without a
  }
  h.run(`selectedMode='normal';keys['shift']=false;myPlayer.weapon='shotgun';myPlayer.x=1200;originalUpdate()`);assert.equal(h.run('myPlayer.x'),1203);
  h.run(`selectedMode='spike';myPlayer.weapon='v_vandal';checkObstacleCollision=()=>true;originalUpdate()`);assert.equal(h.run('myPlayer.isMoving'),false);assert.equal(h.run('myPlayer.moveSpeed'),0);
- assert.equal(SpikeCatalog.weapons.v_bucky.damage,10.2);assert.equal(SpikeCatalog.weapons.v_judge.damage,10.2);assert.equal(SpikeCatalog.weapons.v_shorty.damage,6.6);
+ assert.equal(SpikeCatalog.weapons.v_bucky.damage,22);assert.equal(SpikeCatalog.weapons.v_judge.damage,18);assert.equal(SpikeCatalog.weapons.v_shorty.damage,15);
 });
 test('run-and-gun spread matches 2D collision scale, walking is intermediate, actual shots use it only in general',()=>{
  const w=SpikeCatalog.weapons.v_vandal;
