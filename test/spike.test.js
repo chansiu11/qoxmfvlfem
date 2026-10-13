@@ -229,3 +229,15 @@ test('run-and-gun spread matches 2D collision scale, walking is intermediate, ac
  const angle=mode=>h.run(`selectedMode='${mode}';myPlayer.clipAmmo=10;bullets=[];shoot(myPlayer,0);Math.atan2(bullets[0].dy,bullets[0].dx)`);
  assert(Math.abs(angle('spike')-moving/2)<1e-9);assert(Math.abs(angle('normal')-w.spread/2)<1e-9);
 });
+
+test('general scoped guns look farther ahead while other modes and short-range guns keep their camera',()=>{
+ const h=harness();
+ assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_operator'})})()"),1200);
+ assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_marshal'})})()"),950);
+ assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_vandal'})})()"),620);
+ assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_bucky'})})()"),200);
+ assert.equal(h.run("(()=>{selectedMode='normal';return aimLookDistance({weapon:'v_operator'})})()"),200);
+ h.run("selectedMode='spike';gameStarted=true;gameEnded=false;isMobile=true;isSpectating=false;isRespawning=false;myPlayer.x=1200;myPlayer.y=1200;myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isAiming=true;mobileAimVec={x:1,y:0};obstacles=[];updateAI=()=>{};updateNetwork=()=>{};updateFootsteps=()=>{};updateGuestPlayerInterpolation=()=>{};updateGuestBotInterpolation=()=>{};");
+ const difference=h.run("(()=>{myPlayer.weapon='v_operator';camera.x=myPlayer.x;camera.y=myPlayer.y;originalUpdate();const far=camera.x-myPlayer.x;myPlayer.weapon='v_bucky';camera.x=myPlayer.x;camera.y=myPlayer.y;originalUpdate();return far-(camera.x-myPlayer.x)})()");
+ assert(difference>0,'sniper must show more of the aimed direction than a shotgun');
+});
