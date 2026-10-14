@@ -51,11 +51,11 @@
    planner.started=0;
    const carrier=actors.find(p=>p.id===bomb.carrier),human=carrier&&!carrier.id.startsWith('bot_');
    const chosen=human?SpikeRules.SITES.reduce((a,b)=>distance(carrier,a)<distance(carrier,b)?a:b):SpikeRules.SITES[planner.site];
-   const siteIndex=SpikeRules.SITES.indexOf(chosen),scale=SpikeRules.SIZE/640;
+   const siteIndex=SpikeRules.SITES.indexOf(chosen);
    for(const bot of aiBots){if(!live(bot))continue;const brain=ensureBotBrain(bot),team=teamNumber(bot),attack=team===planner.attackTeam;
     const friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
     const split=planner.style==='split'&&index%2===1&&bomb.carrier!==bot.id;
-    const base=attack?(split?{x:288*scale,y:250*scale}:siteIndex===0?{x:128*scale,y:321*scale}:{x:478*scale,y:346*scale}):index%3===2?{x:316*scale,y:376*scale}:index%2?{x:458*scale,y:412*scale}:{x:130*scale,y:358*scale};
+    const base=attack?SpikeRules.PREP_STAGING.attack[split?2:siteIndex]:SpikeRules.PREP_STAGING.defense[index%3===2?2:index%2];
     const candidates=[{x:base.x+(index%3-1)*35,y:base.y+Math.floor(index/3)*35},base];
     const goal=candidates.find(p=>SpikeRules.prepContains(p,attack?0:1)&&!oldBotCollision(p.x,p.y,18))||base;
     bot._prepGoal=goal;bot._spikeUse=false;bot.isShooting=false;stop(bot,brain);brain.state=attack?(split?'prep_split':'prep_entry'):'prep_hold';

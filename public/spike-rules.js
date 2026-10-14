@@ -58,16 +58,19 @@
  // Buy-phase playable sides follow corridors up to the approach barriers.
  const PREP_AREAS=[
   [[336,48,60,64],[396,96,36,12],[336,108,96,84],[212,136,220,44],[220,176,24,48],
-   [408,176,24,112],[408,248,84,80],[464,320,28,40],[168,200,48,112],[184,300,28,40],
-   [64,316,148,20],[212,212,96,28],[268,236,40,28]],
-  [[80,336,92,120],[168,360,80,40],[224,336,24,44],[192,396,32,64],[192,436,56,24],
+   [408,176,24,112],[408,248,84,80],[168,200,48,112],[184,300,28,12],
+   [212,212,96,28]],
+  [[80,340,92,116],[168,360,80,40],[224,336,24,44],[192,396,32,64],[192,436,56,24],
    [64,456,152,24],[148,440,24,32],[168,476,24,52],[168,508,88,24],[232,448,24,88],
    [236,360,124,32],[304,388,32,52],[308,416,80,44],[368,436,40,24],
    [448,392,32,24],[392,400,144,92],[532,424,36,68],[256,500,76,88],[240,508,16,80],
    [248,508,188,24],[412,456,24,60],[272,472,60,40],[308,448,24,36]]
  ].map(side=>side.map(rect));
- const PREP_BARRIERS=[[80,336,132,0],[268,264,40,0],[408,276,0,52],[464,360,28,0],
+ const PREP_BARRIERS=[[168,312,48,0],[268,240,40,0],[408,276,0,52],[464,328,28,0],[80,340,92,0],
   [224,336,24,0],[236,360,124,0],[448,392,32,0]].map(rect);
+ // Staging positions share the same coordinate convention as the barriers.
+ const PREP_STAGING={attack:[[191,302],[478,316],[288,230]],defense:[[130,351],[464,403],[316,365]]};
+ for(const side of ['attack','defense'])PREP_STAGING[side]=PREP_STAGING[side].map(([x,y])=>({x:x*SCALE,y:y*SCALE}));
  function prepContains(p,side,radius=15){
   const areas=PREP_AREAS[side];if(!areas)return false;
   const point=(x,y)=>areas.some(r=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h);
@@ -206,5 +209,5 @@
   }
   snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo,maxHp:p.maxHp,credits:p.credits,shield:p.shield,shieldType:p.shieldType,shieldPool:p.shieldPool,activeSlot:p.activeSlot,loadout:copy(p.loadout),purchases:copy(p.purchases)}))};}
  }
- root.SpikeRules={mobileMove,weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SPAWN_ANCHORS,PREP_AREAS,PREP_BARRIERS,prepContains,constrainPrep,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
+ root.SpikeRules={mobileMove,weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SPAWN_ANCHORS,PREP_AREAS,PREP_BARRIERS,PREP_STAGING,prepContains,constrainPrep,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

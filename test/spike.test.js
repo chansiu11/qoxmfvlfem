@@ -291,7 +291,8 @@ test('tactical attacker follows Ascent route and completes planting without idle
 
 test('buy-phase sides include approach geometry, reject cross-barrier movement and permit forward buying',()=>{
  const R=globalThis.SpikeRules,k=R.SIZE/640;
- const a={x:128*k,y:321*k},d={x:458*k,y:412*k};
+ const a={x:191*k,y:302*k},d={x:464*k,y:403*k};
+ assert(!R.prepContains({x:128*k,y:321*k},0));assert(!R.prepContains({x:478*k,y:346*k},0));assert(!R.prepContains({x:288*k,y:250*k},0));
  assert(R.prepContains(a,0));assert(!R.prepContains(a,1));assert(R.prepContains(d,1));assert(!R.prepContains(d,0));
  const {p,m}=live();m.phase='prep';Object.assign(p[0],a);assert(m.canBuy(p[0]));m.tick(.01);assert.equal(p[0].x,a.x);
  Object.assign(p[0],d);m.tick(.01);assert.equal(p[0].x,a.x);
