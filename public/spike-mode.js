@@ -49,6 +49,9 @@ const originalBotRespawn=respawnBot;
 respawnBot=p=>{if(selectedMode!=='spike')originalBotRespawn(p);};
 const originalShoot=shoot;
 shoot=(p,spread,shotId)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p._semiLatch)return;const ammo=p.clipAmmo;const result=originalShoot(p,spread,shotId);if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p.clipAmmo<ammo)p._semiLatch=true;return result;};
+// Mouse release must be handled even when it happens over a HUD or outside the canvas.
+window.addEventListener('mouseup',e=>{if(isMobile)return;if(e.button===0){myPlayer.isShooting=false;myPlayer._semiLatch=false;}if(e.button===2)myPlayer.isAiming=false;});
+window.addEventListener('blur',()=>{myPlayer.isShooting=false;myPlayer.isAiming=false;myPlayer._semiLatch=false;});
 const originalEntity=networkEntityState;
 networkEntityState=p=>{const state=originalEntity(p);if(selectedMode==='spike'){state._spikeUse=p===myPlayer?spikeHeld:!!p._spikeUse;state._spikeRound=spikeAppliedRound;state.moveSpeed=Number.isFinite(p.moveSpeed)?p.moveSpeed:undefined;}return state;};
 const originalSend=safeSend;
@@ -124,6 +127,7 @@ getBotWeaponRange=bot=>{
 };
 const originalUpdate=update;
 update=()=>{
+ if(!myPlayer.isShooting)myPlayer._semiLatch=false;
  if(selectedMode!=='spike'||!gameStarted||gameEnded)return originalUpdate();
  if(spikeShopOpen){myPlayer.isShooting=false;myPlayer.isAiming=false;mobileMoveVec.x=0;mobileMoveVec.y=0;for(const k of ['w','a','s','d'])keys[k]=false;}
  const now=performance.now(),dt=Math.min(.1,(now-spikeLastTick)/1000);spikeLastTick=now;spikeFrameDt=Math.max(0,Math.min(.05,dt));

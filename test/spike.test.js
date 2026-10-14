@@ -318,3 +318,12 @@ test('mobile joystick chooses two fixed speeds and quiet approaches stop when ti
  assert(!h.run("SpikeTactics.quietApproach('planted',10,true,true)"));
  assert(!h.run("SpikeTactics.quietApproach('live',60,true,true,true)"));
 });
+
+test('semi-auto fire unlocks on release and weapon switching instead of remaining stuck after first shot',()=>{
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;spikeState={phase:'live'};myPlayer.hp=100;myPlayer.isDead=false;myPlayer.weapon='v_classic';myPlayer.clipAmmo=12;myPlayer.isShooting=true;myPlayer.isReloading=false;myPlayer._spikeUse=false;shoot(myPlayer);`);
+ assert.equal(h.run('myPlayer.clipAmmo'),11);h.run('shoot(myPlayer)');assert.equal(h.run('myPlayer.clipAmmo'),11);
+ h.run(`myPlayer.isShooting=false;gameStarted=false;update();myPlayer.isShooting=true;shoot(myPlayer)`);
+ assert.equal(h.run('myPlayer.clipAmmo'),10);
+ h.run(`myPlayer.loadout={secondary:{id:'v_ghost',clip:15,reserve:60}};myPlayer.activeSlot=null;SpikeRules.equip(myPlayer,'secondary');shoot(myPlayer)`);
+ assert.equal(h.run('myPlayer.clipAmmo'),14);
+});

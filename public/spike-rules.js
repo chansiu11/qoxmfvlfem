@@ -113,7 +113,7 @@
  function equip(p,slot){
   const item=p.loadout?.[slot];if(!item||!catalog()[item.id])return false;
   if(p.weapon&&p.activeSlot&&p.loadout[p.activeSlot])Object.assign(p.loadout[p.activeSlot],{clip:p.clipAmmo,reserve:p.reserveAmmo});
-  p.activeSlot=slot;p.weapon=item.id;p.clipAmmo=item.clip;p.reserveAmmo=item.reserve;p.isReloading=false;p.reloadStartedAt=0;p._reloadToken=(p._reloadToken||0)+1;return true;
+  p._semiLatch=false;p.activeSlot=slot;p.weapon=item.id;p.clipAmmo=item.clip;p.reserveAmmo=item.reserve;p.isReloading=false;p.reloadStartedAt=0;p._reloadToken=(p._reloadToken||0)+1;return true;
  }
  const fresh=id=>({id,clip:catalog()[id].maxClip,reserve:catalog()[id].maxClip*4});
  function shieldDamage(p,damage){const a=gear()[p.shieldType],blocked=a?Math.min(p.shield||0,damage*a.absorb):0;p.shield=Math.max(0,(p.shield||0)-blocked);p._shieldDelay=3;return damage-blocked;}
