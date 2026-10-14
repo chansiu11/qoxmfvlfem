@@ -5,13 +5,13 @@ let spikeMatch=null,spikeState=null,spikeHeld=false,spikeLastTick=performance.no
 const spikeActors=()=>[...roomHumans(),...aiBots].filter(p=>!isAssignedSpectator(p.id));
 const spikeSpawn=p=>SpikeRules.SPAWNS[p.teamId===`team_${spikeState?.attackTeam||1}`?0:1];
 const spikePrepSide=p=>p.teamId===`team_${spikeState?.attackTeam||1}`?0:1;
-let spikePrepActor=null;
+let spikePrepActor=null,spikeNavActor=null;
 const oldPlayerCollision=checkObstacleCollision;
 checkObstacleCollision=(x,y,r=15)=>oldPlayerCollision(x,y,r)||(selectedMode==='spike'&&spikeState?.phase==='prep'&&!SpikeRules.prepContains({x,y},spikePrepSide(myPlayer),r));
 const oldBotCollision=checkBotNavigationCollision;
 checkBotNavigationCollision=(x,y,r=15)=>oldBotCollision(x,y,r)||(spikePrepActor&&!SpikeRules.prepContains({x,y},spikePrepSide(spikePrepActor),r));
 const oldBotSegment=botSegmentClear;
-botSegmentClear=(a,b)=>{if(!oldBotSegment(a,b))return false;if(spikePrepActor){const n=Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/20);for(let i=0;i<=n;i++){const t=i/Math.max(1,n);if(!SpikeRules.prepContains({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t},spikePrepSide(spikePrepActor)))return false;}}return true;};
+botSegmentClear=(a,b)=>{if(!oldBotSegment(a,b))return false;if(spikeNavActor){const n=Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/15);for(let i=0;i<=n;i++){const t=i/Math.max(1,n);const x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t,margin=15+Math.min(4,Math.hypot(x-spikeNavActor.x,y-spikeNavActor.y)/10);if(oldBotCollision(x,y,margin))return false;}}if(spikePrepActor){const n=Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/20);for(let i=0;i<=n;i++){const t=i/Math.max(1,n);if(!SpikeRules.prepContains({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t},spikePrepSide(spikePrepActor)))return false;}}return true;};
 const originalMap=generateMapData;
 generateMapData=(mode,seed)=>mode==='spike'?{seed,worldSize:SpikeRules.SIZE,obstacles:SpikeRules.WALLS.map(w=>({...w})),items:[]}:originalMap(mode,seed);
 const originalTeam=applyEntityTeam;

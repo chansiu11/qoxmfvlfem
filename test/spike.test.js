@@ -337,3 +337,17 @@ test('individual bot tendencies stay stable while routes and combat rhythms diff
  assert.deepEqual(h.run(`SpikeTactics.profile('bot_4')`),profiles[4]);
  for(const p of profiles){assert(p.tempo<=1&&p.tempo>=.88);assert(p.step+p.settle<p.cycle);}
 });
+
+test('adaptive bot navigation leaves wall corners and avoids crowding without teleporting',()=>{
+ const h=harness();h.run(`selectedMode='spike';isHost=true;gameStarted=true;WORLD_SIZE=4800;obstacles=[{x:1300,y:900,w:100,h:500}];spikeFrameDt=1/60;globalThis.walker={...myPlayer,id:'bot_walk',teamId:'team_1',x:1250,y:1200,hp:100,isDead:false,weapon:'v_vandal'};globalThis.goal={x:1500,y:1200};aiBots.push(walker);myPlayer.teamId='team_2';myPlayer.isDead=true;`);
+ const result=h.run(`(()=>{const brain=ensureBotBrain(walker);let maxStep=0,collisions=0;for(let i=0;i<700;i++){const old={x:walker.x,y:walker.y};SpikeTactics.move(walker,brain,goal);maxStep=Math.max(maxStep,Math.hypot(walker.x-old.x,walker.y-old.y));if(oldBotCollision(walker.x,walker.y,15))collisions++;}return {remaining:Math.hypot(walker.x-goal.x,walker.y-goal.y),maxStep,collisions,x:walker.x,y:walker.y,path:walker._navigation.path,blocked:walker._navigation.blocked}})()`);
+ assert(result.remaining<30,JSON.stringify(result));assert(result.maxStep<=3.600001);assert.equal(result.collisions,0);
+ h.run(`globalThis.ally={...walker,id:'bot_ally',x:walker.x,y:walker.y};aiBots.push(ally);walker._navCrowd=null;`);
+ assert(h.run('SpikeTactics.routeCost(walker,walker)')>0);
+});
+
+test('bots sharing a destination maintain personal space along the approach',()=>{
+ const h=harness();h.run(`selectedMode='spike';isHost=true;WORLD_SIZE=4800;obstacles=[];spikeFrameDt=1/60;myPlayer.isDead=true;myPlayer.hp=0;aiBots.push({...myPlayer,id:'bot_left',teamId:'team_1',x:1200,y:1200,hp:100,isDead:false,weapon:'v_vandal'},{...myPlayer,id:'bot_right',teamId:'team_1',x:1200,y:1200,hp:100,isDead:false,weapon:'v_vandal'});`);
+ const separation=h.run(`(()=>{for(let i=0;i<60;i++)for(const bot of aiBots)SpikeTactics.move(bot,ensureBotBrain(bot),{x:1800,y:1200});return Math.hypot(aiBots[0].x-aiBots[1].x,aiBots[0].y-aiBots[1].y)})()`);
+ assert(separation>20,`separation ${separation}`);
+});

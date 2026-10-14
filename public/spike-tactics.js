@@ -27,7 +27,50 @@
  const aliveActors=()=>spikeActors().filter(live);
  const teamNumber=p=>p.teamId==='team_2'?2:1;
  const stop=(bot,brain)=>{bot.isMoving=false;bot.moveSpeed=0;brain.movementRequested=false;};
- function move(bot,brain,goal,quiet=false){if(!goal)return;const x=bot.x,y=bot.y;bot._spikeMoveBudget=SpikeRules.movementDistance(spikeFrameDt,quiet,bot.weapon)*traits(bot).tempo;moveBotToward(bot,goal,2,quiet?'stealth':'walk');bot.moveSpeed=spikeFrameDt>0?distance(bot,{x,y})/spikeFrameDt/SpikeRules.UNITS_PER_METER:0;}
+ const traffic=new Map();let trafficClock=0;
+ function routeCost(bot,point){const crowd=bot._navCrowd||aliveActors().filter(p=>p.id!==bot.id&&teamNumber(p)===teamNumber(bot));let cost=0;
+  for(const p of crowd){const d=distance(p,point);if(d<85)cost+=(85-d)*.13;}
+  const key=teamNumber(bot)+':'+Math.floor(point.x/80)+':'+Math.floor(point.y/80),entry=traffic.get(key);
+  if(entry&&entry.id!==bot.id&&entry.age>trafficClock-5)cost+=Math.min(5,entry.count*.6);
+  return Math.min(22,cost);
+ }
+ function nearestGoal(bot,goal){if(!checkBotNavigationCollision(goal.x,goal.y,20))return goal;
+  const candidates=[];for(const r of [30,60,100])for(let i=0;i<12;i++){const a=i*Math.PI/6,p={x:goal.x+Math.cos(a)*r,y:goal.y+Math.sin(a)*r};if(!checkBotNavigationCollision(p.x,p.y,20))candidates.push(p);}
+  return candidates.sort((a,b)=>distance(a,goal)+distance(a,bot)*.05-distance(b,goal)-distance(b,bot)*.05)[0]||null;
+ }
+ function move(bot,brain,goal,quiet=false){if(!goal)return;
+  const dt=Math.max(.001,spikeFrameDt),clock=bot._navClock=(bot._navClock||0)+dt,original={x:bot.x,y:bot.y};
+  bot._navCrowd=aliveActors().filter(p=>p.id!==bot.id&&teamNumber(p)===teamNumber(bot));
+  const target=nearestGoal(bot,goal);if(!target){stop(bot,brain);return;}
+  const state=bot._navigation||(bot._navigation={goal:null,path:[],replan:0,blocked:0,lastTurn:bot.moveAngle||bot.angle||0});
+  if(!state.goal||distance(state.goal,target)>65){state.goal={...target};state.path=[];state.replan=0;state.blocked=0;}
+  if(distance(bot,target)<20){stop(bot,brain);state.blocked=0;return;}
+  const direct=botSegmentClear(bot,target);
+  if(!direct&&(!state.path.length||!botSegmentClear(bot,state.path[0]))&&clock>=state.replan){
+   spikeNavActor=bot;try{state.path=planBotRoute(bot,target)||[];}finally{spikeNavActor=null;}
+   state.replan=clock+.65;
+  }
+  while(state.path.length&&distance(bot,state.path[0])<18)state.path.shift();
+  if(state.path.length)for(let i=Math.min(5,state.path.length-1);i>0;i--)if(botSegmentClear(bot,state.path[i])){state.path.splice(0,i);break;}
+  let next=direct?target:state.path[0];
+  if(!next){state.blocked+=dt;brain.state='route_reconsider';stop(bot,brain);if(state.blocked>.8){bot._tacticRoute=null;state.replan=0;}if(state.blocked>1.5&&clock>(bot._laneSwapAt||0)){bot._requestLaneSwap=true;bot._laneSwapAt=clock+8;state.blocked=0;}return;}
+  let angle=Math.atan2(next.y-bot.y,next.x-bot.x),rx=0,ry=0;
+  // Personal space affects only local steering. Teammates are not solid walls.
+  for(const ally of aliveActors()){if(ally.id===bot.id||teamNumber(ally)!==teamNumber(bot))continue;const d=distance(bot,ally);if(d<75){const a=d>1?Math.atan2(bot.y-ally.y,bot.x-ally.x):traits(bot).angle;const weight=(75-d)/75;rx+=Math.cos(a)*weight;ry+=Math.sin(a)*weight;}}
+  const preferred=Math.atan2(Math.sin(angle)+ry*.8,Math.cos(angle)+rx*.8);
+  const budget=SpikeRules.movementDistance(dt,quiet,bot.weapon)*traits(bot).tempo;
+  let chosen=null,best=Infinity;
+  for(const offset of [0,.3,-.3,.6,-.6,1,-1]){const a=preferred+offset,p={x:bot.x+Math.cos(a)*Math.max(budget,12),y:bot.y+Math.sin(a)*Math.max(budget,12)};if(!botSegmentClear(bot,p)||checkBotNavigationCollision(p.x,p.y,18))continue;
+   const score=distance(p,next)+Math.abs(botAngleDelta(a,state.lastTurn))*3+Math.abs(botAngleDelta(a,preferred))*12+routeCost(bot,p)*.8;if(score<best){best=score;chosen=a;}}
+  brain.movementRequested=true;bot.movementMode=quiet?'stealth':'walk';
+  if(chosen!==null){const length=Math.min(budget,distance(bot,next)),n=Math.max(1,Math.ceil(length/2));for(let i=0;i<n;i++){const x=bot.x+Math.cos(chosen)*length/n,y=bot.y+Math.sin(chosen)*length/n;if(checkBotNavigationCollision(x,y,15))break;bot.x=x;bot.y=y;}state.lastTurn=chosen;}
+  const moved=distance(bot,original);bot.isMoving=moved>.01;bot.moveSpeed=moved/dt/40;if(bot.isMoving)bot.moveAngle=Math.atan2(bot.y-original.y,bot.x-original.x);
+  // Use elapsed simulation time, and keep the chosen escape stable instead of zigzagging every frame.
+  const progress=distance(original,next)-distance(bot,next);
+  state.blocked=progress>.05?Math.max(0,state.blocked-dt*2):state.blocked+dt;
+  if(state.blocked>.65){state.path=[];state.replan=0;bot._route=null;if(state.blocked>1.5){bot._tacticRoute=null;state.goal=null;state.blocked=0;}}
+  const key=teamNumber(bot)+':'+Math.floor(bot.x/80)+':'+Math.floor(bot.y/80);if(bot._trafficCell!==key){const prior=traffic.get(key);traffic.set(key,{id:bot.id,age:trafficClock,count:(prior?.count||0)+1});bot._trafficCell=key;if(traffic.size>800)traffic.delete(traffic.keys().next().value);}
+ }
  function safePosition(bot,point,offset=0){const p=traits(bot),angle=p.angle+offset;
   const candidates=[1,.55,-.55].map(f=>({x:point.x+Math.cos(angle)*p.spacing*f,y:point.y+Math.sin(angle)*p.spacing*f}));candidates.push(point);
   return candidates.find(candidate=>!checkBotNavigationCollision(candidate.x,candidate.y,18)&&botSegmentClear(point,candidate))||point;
@@ -35,6 +78,7 @@
  function route(bot,brain,points,key,quiet){
   if(bot._tacticRoute?.key!==key)bot._tacticRoute={key,index:0,points:points.filter(Boolean).map((p,i,all)=>i===all.length-1&&bot.id===spikeMatch.bomb.carrier?p:safePosition(bot,p,i*.8))};
   const path=bot._tacticRoute.points,state=bot._tacticRoute;
+  if(state.index===0){let closest=0;for(let i=1;i<path.length;i++)if(distance(bot,path[i])+100<distance(bot,path[closest]))closest=i;state.index=closest;}
   while(state.index<path.length-1&&distance(bot,path[state.index])<70)state.index++;
   const goal=path[Math.min(state.index,path.length-1)];
   if(goal&&distance(bot,goal)>35)move(bot,brain,goal,quiet);return goal;
@@ -57,7 +101,7 @@
   const age=now-(bot._duelStart||now),cycle=age%p.cycle,close=distance(bot,enemy)<p.closeRange;
   if(age>650&&cycle<p.step&&!close&&!bot.isReloading){
    brain.state='tactical_reposition';const side=(Math.floor(age/p.cycle)%2?1:-1)*p.peekSide;const a=Math.atan2(enemy.y-bot.y,enemy.x-bot.x)+side*Math.PI/2;
-   const x=bot.x,y=bot.y;moveAIBot(bot,Math.cos(a)*1.3,Math.sin(a)*1.3);bot.moveSpeed=distance(bot,{x,y})/Math.max(.001,spikeFrameDt)/40;watch(bot,brain,enemy,dt);return;
+   const x=bot.x,y=bot.y;move(bot,brain,{x:bot.x+Math.cos(a)*60,y:bot.y+Math.sin(a)*60});watch(bot,brain,enemy,dt);return;
   }
   stop(bot,brain);brain.state='tactical_burst';
   if(cycle<p.step+p.settle&&age>650)brain.reactionUntil=Math.max(brain.reactionUntil,now+p.settle);
@@ -67,7 +111,8 @@
  function tick(){
   if(!isHost||!spikeMatch||!['prep','live','planted'].includes(spikeState?.phase))return;
   const now=Date.now(),dt=Math.max(.001,spikeFrameDt),actors=aliveActors(),bomb=spikeMatch.bomb;
-  if(!planner||planner.round!==spikeMatch.round){planner=new Planner(spikeMatch.round,spikeMatch.attackTeam);for(const bot of aiBots){bot._tacticRoute=null;bot._retakeWaitAt=0;bot._duelStart=0;bot._duelCover=null;const brain=ensureBotBrain(bot);brain.observed=null;brain.scanAt=0;brain.targetId=null;brain.lastSeenAt=0;brain.burstLeft=0;brain.burstPauseUntil=0;bot.investigateTarget=null;}}
+  if(!planner||planner.round!==spikeMatch.round){planner=new Planner(spikeMatch.round,spikeMatch.attackTeam);traffic.clear();trafficClock=0;for(const bot of aiBots){bot._tacticRoute=null;bot._navigation=null;bot._requestLaneSwap=false;bot._laneSwapAt=0;bot._trafficCell=null;bot._retakeWaitAt=0;bot._duelStart=0;bot._duelCover=null;const brain=ensureBotBrain(bot);brain.observed=null;brain.scanAt=0;brain.targetId=null;brain.lastSeenAt=0;brain.burstLeft=0;brain.burstPauseUntil=0;bot.investigateTarget=null;}}
+  trafficClock+=dt;
   for(const bot of aiBots){if(bot._tacticPhase!==spikeState.phase){bot._tacticPhase=spikeState.phase;bot._phaseAge=0;}bot._phaseAge=(bot._phaseAge||0)+dt;}
   if(spikeState.phase==='prep'){
    planner.started=0;
@@ -94,7 +139,7 @@
   const humanDefusing=defenders.some(p=>!p.id.startsWith('bot_')&&p._spikeUse&&distance(p,bomb)<85);
   const defuser=!humanDefusing&&bomb.planted?defenders.filter(p=>p.id.startsWith('bot_')).sort((a,b)=>distance(a,bomb)-distance(b,bomb)||a.id.localeCompare(b.id))[0]:null;
   for(const bot of aiBots){if(!live(bot))continue;const brain=ensureBotBrain(bot),team=teamNumber(bot),attack=team===planner.attackTeam;
-   updateBotStuckRecovery(bot,brain,performance.now());brain.movementRequested=false;stop(bot,brain);bot._spikeMoveBudget=SpikeRules.movementDistance(dt,false,bot.weapon);
+   brain.movementRequested=false;stop(bot,brain);bot._spikeMoveBudget=SpikeRules.movementDistance(dt,false,bot.weapon);
    const enemy=observed.get(bot.id),friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
    if(enemy){combat(bot,brain,enemy,now,dt);continue;}
    if(bot.clipAmmo<=0&&bot.reserveAmmo>0&&!bot.isReloading)reloadWeapon(bot);
@@ -119,7 +164,13 @@
     else{
      const carrier=actors.find(p=>p.id===bomb.carrier),humanCarrier=carrier&&!carrier.id.startsWith('bot_');
      const chosen=humanCarrier?SpikeRules.SITES.reduce((a,b)=>distance(carrier,a)<distance(carrier,b)?a:b):site;
-     const siteIndex=SpikeRules.SITES.indexOf(chosen),split=splitRole(bot,index,plan.style,bomb.carrier);
+     const siteIndex=SpikeRules.SITES.indexOf(chosen);
+     const choiceKey=spikeMatch.round+':'+siteIndex+':'+plan.style;
+     if(bot._laneChoice?.key!==choiceKey||bot._requestLaneSwap||bot._navigation?.blocked>.8&&(bot._tacticRoute?.index||0)<=1){const main=call(siteIndex?'B MAIN':'A MAIN'),middle=call(siteIndex?'MARKET':'TREE');
+      const preferred=splitRole(bot,index,plan.style,bomb.carrier),mainBusy=friends.filter(p=>p.id!==bot.id&&distance(p,main)<450).length,midBusy=friends.filter(p=>p.id!==bot.id&&distance(p,middle)<450).length;
+      const alternate=bot._requestLaneSwap?!bot._laneChoice?.split:bomb.carrier!==bot.id&&(preferred||mainBusy>=2&&midBusy<mainBusy);bot._laneChoice={key:choiceKey,split:alternate};bot._requestLaneSwap=false;
+     }
+     const split=bot._laneChoice.split;
      const points=siteIndex===0?(split?[call('MID TOP'),call('CATWALK'),call('TREE'),chosen]:[call('A LOBBY'),call('A MAIN'),chosen]):(split?[call('MID TOP'),call('MID'),call('MARKET'),chosen]:[call('B LOBBY'),call('B MAIN'),chosen]);
      brain.state=plan.style==='rotate'?'site_rotation':split?'split_entry':plan.style==='default'?'default_control':'group_entry';
      const point=points.filter(Boolean)[bot._tacticRoute?.index||0]||chosen;
@@ -142,5 +193,5 @@
    if(bot.investigateTarget&&now-bot.investigateTarget.time<1500)watch(bot,brain,bot.investigateTarget,dt);
   }
  }
- root.SpikeTactics={Planner,profile,quietApproach,tick};
+ root.SpikeTactics={Planner,profile,quietApproach,routeCost,move,tick};
 })(globalThis);
