@@ -27,6 +27,7 @@ function harness(){
  vm.runInContext(code.slice(0,code.indexOf('</script>')<0?undefined:code.indexOf('</script>')),c);
  vm.runInContext(fs.readFileSync(new URL('../public/spike-catalog.js',import.meta.url),'utf8'),c);
  vm.runInContext(fs.readFileSync(new URL('../public/spike-rules.js',import.meta.url),'utf8'),c);
+ vm.runInContext(fs.readFileSync(new URL('../public/spike-tactics.js',import.meta.url),'utf8'),c);
  vm.runInContext(fs.readFileSync(new URL('../public/spike-mode.js',import.meta.url),'utf8'),c);
  vm.runInContext(fs.readFileSync(new URL('../public/spike-shop.js',import.meta.url),'utf8'),c);
  vm.runInContext(fs.readFileSync(new URL('../public/game-audio.js',import.meta.url),'utf8'),c);
@@ -260,4 +261,30 @@ test('Ascent attacker and defender spawn callouts anchor five clear, separate bu
  match.phase='end';match.time=0;match.tick(.05);
  assert.equal(players[0].x,SPAWN_ANCHORS[1].x);
  assert.equal(players[5].x,SPAWN_ANCHORS[0].x);
+});
+
+test('general tactics use expiring team reports for rotations and never read hidden defenders',()=>{
+ const h=harness();h.run('globalThis.plan=new SpikeTactics.Planner(1,1);plan.decide(1000,100,SpikeRules.SITES)');
+ assert.equal(h.run('plan.decide(15000,80,SpikeRules.SITES).site'),0);
+ h.run("plan.report(1,{id:'seen1',...SpikeRules.SITES[0]},16000);plan.report(1,{id:'seen2',...SpikeRules.SITES[0]},16000)");
+ assert.equal(h.run('plan.decide(16010,70,SpikeRules.SITES).site'),1);
+ assert.equal(h.run('plan.style'),'rotate');
+ assert.equal(h.run('plan.known(2,16010).length'),0);
+ assert.equal(h.run('plan.known(1,21000).length'),0);
+ assert.equal(h.run('plan.decide(21000,20,SpikeRules.SITES).style'),'group');
+});
+test('general tactical bots plant, select one defuser and stop before shooting',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='host';myPlayer.teamId='team_2';myPlayer.isDead=true;myPlayer.hp=0;aiBots.push({...myPlayer,id:'bot_a',teamId:'team_1',hp:100,isDead:false,weapon:'v_vandal',clipAmmo:25,reserveAmmo:100},{...myPlayer,id:'bot_b',teamId:'team_2',hp:100,isDead:false,weapon:'v_vandal',clipAmmo:25,reserveAmmo:100},{...myPlayer,id:'bot_c',teamId:'team_2',hp:100,isDead:false,weapon:'v_vandal',clipAmmo:25,reserveAmmo:100});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeMatch.time=100;spikeState=spikeMatch.snapshot();chooseBotEnemy=()=>null;Object.assign(aiBots[0],SpikeRules.SITES[0]);spikeMatch.bomb.carrier=aiBots[0].id;SpikeTactics.tick()`);
+ assert.equal(h.run('aiBots[0]._spikeUse'),true);
+ h.run(`spikeMatch.bomb={...SpikeRules.SITES[0],site:'A',planted:true,carrier:null,timer:40};spikeMatch.phase='planted';spikeState=spikeMatch.snapshot();Object.assign(aiBots[1],SpikeRules.SITES[0]);Object.assign(aiBots[2],SpikeRules.SITES[0]);SpikeTactics.tick()`);
+ assert.equal(h.run('aiBots.filter(p=>p.teamId===\'team_2\'&&p._spikeUse).length'),1);
+ h.run(`spikeMatch.phase='live';spikeState=spikeMatch.snapshot();globalThis.firedMoving=null;chooseBotEnemy=bot=>({id:'visible',x:bot.x+150,y:bot.y});updateHumanBotAim=(bot)=>{firedMoving=bot.isMoving};SpikeTactics.tick()`);
+ assert.equal(h.run('firedMoving'),false);
+
+});
+
+test('tactical attacker follows Ascent route and completes planting without idle patrol overriding it',()=>{
+ const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='3';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();spikeMatch.phase='live';spikeMatch.time=100;myPlayer.isDead=true;myPlayer.hp=0;globalThis.carrier=aiBots.find(p=>p.teamId==='team_'+spikeMatch.attackTeam);spikeMatch.bomb.carrier=carrier.id;chooseBotEnemy=()=>null;spikeState=spikeMatch.snapshot();spikeFrameDt=1/30;`);
+ const planted=h.run(`(()=>{for(let i=0;i<2100&&!spikeMatch.bomb.planted;i++){SpikeTactics.tick();spikeMatch.tick(1/30);spikeState=spikeMatch.snapshot();}return spikeMatch.bomb.planted})()`);
+ assert.equal(planted,true);
 });

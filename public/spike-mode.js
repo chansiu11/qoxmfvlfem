@@ -107,23 +107,12 @@ unequipWeapon=()=>{if(selectedMode!=='spike')spikeOldUnequip();};
 const originalSelect=selectDeathmatchWeapon;
 selectDeathmatchWeapon=type=>selectedMode==='spike'?spikeChoose(type):originalSelect(type);
 const originalUpdateAI=updateAI;
-updateAI=()=>{
- if(selectedMode!=='spike')return originalUpdateAI();
- if(!isHost||!['live','planted'].includes(spikeState?.phase))return;
- for(const bot of aiBots)bot._spikeMoveBudget=SpikeRules.movementDistance(spikeFrameDt,false,bot.weapon);
- originalUpdateAI();
- // Idle bots pursue the objective; combat AI retains priority when enemies are visible.
- const b=spikeMatch.bomb;
- for(const bot of aiBots){
-  bot._spikeUse=false;if(bot.isDead||bot.hp<=0)continue;
-  const enemies=spikeActors().filter(p=>p.hp>0&&!p.isDead&&!areAllies(bot,p));
-  if(enemies.some(p=>Math.hypot(p.x-bot.x,p.y-bot.y)<800&&hasLineOfSight(bot,p)))continue;
-  const attack=bot.teamId===`team_${spikeMatch.attackTeam}`;
-  const target=b.planted?b:attack?(b.carrier===bot.id?SpikeRules.SITES[(spikeMatch.round-1)%2]:getCombatEntityById(b.carrier)||b):SpikeRules.SITES[Number(bot.id.replace('bot_',''))%2||0];
-  const canUse=b.planted?!attack&&Math.hypot(bot.x-b.x,bot.y-b.y)<75:b.carrier===bot.id&&SpikeRules.SITES.some(s=>Math.hypot(bot.x-s.x,bot.y-s.y)<s.r-20);
-  if(canUse){bot._spikeUse=true;bot.isMoving=false;bot.isShooting=false;}
-  else if(Math.hypot(bot.x-target.x,bot.y-target.y)>90)moveBotToward(bot,target,1.5,'walk');
- }
+updateAI=()=>{if(selectedMode!=='spike')return originalUpdateAI();return SpikeTactics.tick();};
+const oldBotWeaponRange=getBotWeaponRange;
+getBotWeaponRange=bot=>{
+ if(selectedMode!=='spike')return oldBotWeaponRange(bot);
+ const category=WEAPONS[bot.weapon]?.category;
+ return category==='Sniper'?{ideal:1050,min:450,max:1900,vision:2100}:category==='Shotgun'?{ideal:160,min:60,max:480,vision:1100}:{ideal:600,min:160,max:1300,vision:1500};
 };
 const originalUpdate=update;
 update=()=>{
