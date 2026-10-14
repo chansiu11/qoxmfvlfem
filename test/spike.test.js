@@ -379,14 +379,14 @@ test('bot fire rechecks the live enemy behind walls and outside its current fiel
  h.run(`myPlayer.x=1400;shoot(bot)`);assert.equal(h.run('bot.clipAmmo'),24);
 });
 
-test('a shared angle is capped at three bots and overflow watches the rear or lurks',()=>{
+test('a shared angle is capped at two bots and overflow watches the rear or lurks',()=>{
  const h=harness();h.run(`selectedMode='spike';spikeState={phase:'live'};spikeMatch={round:1};myPlayer.hp=0;myPlayer.isDead=true;obstacles=[];aiBots.push(...Array.from({length:12},(_,i)=>({...myPlayer,id:'bot_cap_'+i,teamId:'team_1',x:1200,y:1200,hp:100,isDead:false,angle:0,weapon:'v_vandal'})));for(const bot of aiBots)SpikeTactics.watch(bot,ensureBotBrain(bot),{x:1600,y:1200},1/60);`);
- assert.equal(h.run('aiBots.filter(p=>Math.abs(p._aimClaim.angle)<.01).length'),3);
- assert.equal(h.run("aiBots.filter(p=>p._angleOverflow&&['rear_guard','angle_lurk'].includes(p._angleOverflow.role)).length"),9);
+ assert.equal(h.run('aiBots.filter(p=>Math.abs(p._aimClaim.angle)<.01).length'),2);
+ assert.equal(h.run("aiBots.filter(p=>p._angleOverflow&&['rear_guard','angle_lurk'].includes(p._angleOverflow.role)).length"),10);
  h.run(`aiBots[0].isDead=true;globalThis.available=SpikeTactics.reserveAim(aiBots[3],{x:1600,y:1200})`);assert.equal(h.run('available'),true);
 });
 test('visible enemy combat also caps teammates firing from the same angle',()=>{
  const h=harness();h.run(`selectedMode='spike';isHost=true;myPlayer.id='human_enemy';myPlayer.teamId='team_2';myPlayer.hp=100;myPlayer.isDead=false;aiBots.push(...Array.from({length:6},(_,i)=>({...myPlayer,id:'bot_firecap_'+i,teamId:'team_1',weapon:'v_vandal',clipAmmo:25})));spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeMatch.time=90;spikeState=spikeMatch.snapshot();myPlayer.x=1400;myPlayer.y=1200;for(const bot of aiBots){bot.x=1200;bot.y=1200;bot.angle=0}obstacles=[];chooseBotEnemy=()=>({id:myPlayer.id,x:myPlayer.x,y:myPlayer.y});globalThis.attempts=[];updateHumanBotAim=bot=>attempts.push(bot.id);SpikeTactics.tick();`);
- assert.equal(h.run('attempts.length'),3);
- assert.equal(h.run('aiBots.filter(p=>p._angleOverflow).length'),3);
+ assert.equal(h.run('attempts.length'),2);
+ assert.equal(h.run('aiBots.filter(p=>p._angleOverflow).length'),4);
 });

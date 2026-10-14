@@ -83,7 +83,7 @@
   const goal=path[Math.min(state.index,path.length-1)];
   if(goal&&distance(bot,goal)>35)move(bot,brain,goal,quiet);return goal;
  }
- const ANGLE_LIMIT=3;
+ const ANGLE_LIMIT=2;
  function sameAngle(a,b){return distance(a.origin,b.origin)<900&&Math.abs(botAngleDelta(a.angle,b.angle))<.3&&(a.lane===b.lane||distance(a.point,b.point)<300);}
  function aimRequest(bot,point){const angle=Math.atan2(point.y-bot.y,point.x-bot.x),nearest=SpikeRules.CALLOUTS.slice().sort((a,b)=>distance(a,point)-distance(b,point))[0];
   return {origin:{x:bot.x,y:bot.y},point:{x:point.x,y:point.y},angle,lane:nearest&&distance(nearest,point)<450?nearest.name:Math.floor(point.x/300)+':'+Math.floor(point.y/300),key:spikeMatch?.round+':'+spikeState?.phase+':'+teamNumber(bot),stamp:trafficClock};
