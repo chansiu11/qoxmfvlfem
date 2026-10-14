@@ -2,6 +2,7 @@
 (function(root){
  const live=p=>p.hp>0&&!p.isDead;
  const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+ function quietApproach(phase,time,nearSite,nearThreat,combat=false){return !combat&&['live','planted'].includes(phase)&&time>(phase==='planted'?14:22)&&(nearSite||nearThreat);}
  class Planner{
   constructor(round,attackTeam){this.round=round;this.attackTeam=attackTeam;this.site=(round-1)%2;this.style=['group','split','default'][(round-1)%3];this.started=0;this.changed=0;this.contacts=new Map();}
   report(team,enemy,now){this.contacts.set(team+':'+enemy.id,{team,id:enemy.id,x:enemy.x,y:enemy.y,time:now});}
@@ -79,7 +80,7 @@
    const tradeBuddy=friends.find(p=>p.id!==bot.id&&observed.has(p.id)&&distance(bot,p)<420);
    if(tradeBuddy&&recent&&now-recent.time<1000&&bomb.carrier!==bot.id&&!bomb.planted){brain.state='trade_support';move(bot,brain,safePosition(bot,tradeBuddy,index*2.4));watch(bot,brain,recent,dt);continue;}
    if(bomb.planted){
-    if(attack){brain.state='postplant_hold';goal=safePosition(bot,bomb,index*2.4);if(distance(bot,goal)>55)move(bot,brain,goal,true);watch(bot,brain,call(bomb.site==='A'?'TREE':'MARKET'),dt);}
+    if(attack){brain.state='postplant_hold';goal=safePosition(bot,bomb,index*2.4);if(distance(bot,goal)>55)move(bot,brain,goal,quietApproach('planted',spikeState.time,true,false));watch(bot,brain,call(bomb.site==='A'?'TREE':'MARKET'),dt);}
     else {
      const closeFriends=friends.filter(p=>distance(p,bomb)<600).length;
      if(bot===defuser&&distance(bot,bomb)<70){brain.state='defuse';bot._spikeUse=true;stop(bot,brain);}
@@ -87,7 +88,7 @@
       // Wait briefly for a teammate at the entrance, but never waste the last defuse window.
       const wait=distance(bot,bomb)<450&&distance(bot,bomb)>160&&closeFriends<Math.min(2,friends.length)&&spikeState.time>13;
       if(wait&&!bot._retakeWaitAt)bot._retakeWaitAt=now;
-      if(!wait||now-(bot._retakeWaitAt||now)>1800)move(bot,brain,goal);watch(bot,brain,recent||bomb,dt);
+      if(!wait||now-(bot._retakeWaitAt||now)>1800)move(bot,brain,goal,quietApproach('planted',spikeState.time,distance(bot,bomb)<650,!!recent));watch(bot,brain,recent||bomb,dt);
      }
     }
    }else if(attack){
@@ -104,19 +105,19 @@
      const elapsed=now-planner.started,stage=plan.style==='default'&&elapsed<4500;
      if(stage&&distance(bot,points[0])<95){watch(bot,brain,recent||points[1],dt);}
      else if(nearMate&&index>0&&now%1000<150){watch(bot,brain,recent||point,dt);}
-     else{goal=route(bot,brain,points,'attack:'+siteIndex+':'+split,plan.style==='default'||!!recent);watch(bot,brain,recent||goal||spread,dt);}
+     else{goal=route(bot,brain,points,'attack:'+siteIndex+':'+split,quietApproach('live',spikeState.time,distance(bot,chosen)<850,!!recent&&distance(bot,recent)<950||!!bot.investigateTarget&&now-bot.investigateTarget.time<1500));watch(bot,brain,recent||goal||spread,dt);}
     }
    }else{
     const assigned=index%3===2?call('MARKET'):SpikeRules.SITES[index%2];
     const contact=recent&&distance(recent,SpikeRules.SITES[0])<650?SpikeRules.SITES[0]:recent&&distance(recent,SpikeRules.SITES[1])<650?SpikeRules.SITES[1]:null;
     const anchor=index<2,respond=contact&&(!anchor||distance(bot,contact)<1000||spikeState.time<35);
     goal=safePosition(bot,respond?contact:assigned,index*2.4);brain.state=respond?'defense_support':'hold_angle';
-    if(distance(bot,goal)>55)move(bot,brain,goal,!!recent);watch(bot,brain,recent||call(index%2?'B MAIN':'A MAIN'),dt);
+    if(distance(bot,goal)>55)move(bot,brain,goal,quietApproach('live',spikeState.time,false,!!recent&&distance(bot,recent)<950||!!bot.investigateTarget&&now-bot.investigateTarget.time<1500));watch(bot,brain,recent||call(index%2?'B MAIN':'A MAIN'),dt);
    }
    // Approximate sound direction may change the watched angle; it never gives a live enemy position.
    listenForBotThreats(bot,brain,now);listenForBotFootsteps(bot,brain,now);
    if(bot.investigateTarget&&now-bot.investigateTarget.time<1500)watch(bot,brain,bot.investigateTarget,dt);
   }
  }
- root.SpikeTactics={Planner,tick};
+ root.SpikeTactics={Planner,quietApproach,tick};
 })(globalThis);

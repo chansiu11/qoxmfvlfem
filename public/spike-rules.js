@@ -5,6 +5,8 @@
  const MOVE_MPS=5.4, QUIET_MPS=3.24;
  const weaponSpeed=id=>root.SpikeCatalog?.weapons[id]?.moveMps||MOVE_MPS;
  const movementDistance=(dt,quiet=false,weapon=null)=>weaponSpeed(weapon)*(quiet?.6:1)*UNITS_PER_METER*Math.max(0,Math.min(.05,dt));
+ // Two fixed joystick speeds with a small neutral zone; direction stays analog.
+ function mobileMove(x,y){const magnitude=Math.hypot(x,y);if(magnitude<=.08)return {x:0,y:0,quiet:false};return {x:x/magnitude,y:y/magnitude,quiet:magnitude<=.6};}
  function movingSpread(p){
   const w=root.SpikeCatalog?.weapons[p.weapon];if(!w)return 0;
   const base=w.spread;if(!p.isMoving)return base;
@@ -204,5 +206,5 @@
   }
   snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo,maxHp:p.maxHp,credits:p.credits,shield:p.shield,shieldType:p.shieldType,shieldPool:p.shieldPool,activeSlot:p.activeSlot,loadout:copy(p.loadout),purchases:copy(p.purchases)}))};}
  }
- root.SpikeRules={weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SPAWN_ANCHORS,PREP_AREAS,PREP_BARRIERS,prepContains,constrainPrep,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
+ root.SpikeRules={mobileMove,weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SPAWN_ANCHORS,PREP_AREAS,PREP_BARRIERS,prepContains,constrainPrep,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

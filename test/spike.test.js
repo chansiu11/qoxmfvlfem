@@ -304,3 +304,16 @@ test('bots select tactical staging goals and reach them before the buy phase end
  const result=h.run(`(()=>{for(let i=0;i<840;i++){SpikeTactics.tick();spikeMatch.tick(1/30);spikeState=spikeMatch.snapshot();}return aiBots.map(bot=>({valid:SpikeRules.prepContains(bot,spikePrepSide(bot)),distance:Math.hypot(bot.x-bot._prepGoal.x,bot.y-bot._prepGoal.y),use:bot._spikeUse,state:bot._brain.state}))})()`);
  for(const bot of result){assert(bot.valid);assert(bot.distance<70,JSON.stringify(bot));assert.equal(bot.use,false);assert(bot.state.startsWith('prep_'));}
 });
+
+test('mobile joystick chooses two fixed speeds and quiet approaches stop when time is urgent',()=>{
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=false;isMobile=true;spikeFrameDt=1/60;spikeState={phase:'live'};obstacles=[];myPlayer.hp=100;myPlayer.isDead=false;myPlayer.weapon='v_vandal';updateAI=()=>{};updateNetwork=()=>{}`);
+ const step=amount=>h.run(`(()=>{myPlayer.x=1200;myPlayer.y=1200;mobileMoveVec={x:${amount},y:0};originalUpdate();return [myPlayer.x-1200,myPlayer.movementMode]})()`);
+ assert.equal(step(.05)[0],0);
+ assert(Math.abs(step(.2)[0]-2.16)<1e-8);assert(Math.abs(step(.6)[0]-2.16)<1e-8);assert.equal(step(.2)[1],'stealth');
+ assert(Math.abs(step(.61)[0]-3.6)<1e-8);assert(Math.abs(step(1)[0]-3.6)<1e-8);
+ assert(h.run("SpikeTactics.quietApproach('live',60,true,false)"));
+ assert(h.run("SpikeTactics.quietApproach('live',60,false,true)"));
+ assert(!h.run("SpikeTactics.quietApproach('live',15,true,true)"));
+ assert(!h.run("SpikeTactics.quietApproach('planted',10,true,true)"));
+ assert(!h.run("SpikeTactics.quietApproach('live',60,true,true,true)"));
+});
