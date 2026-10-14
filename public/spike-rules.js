@@ -53,6 +53,31 @@
   [468,420,12,12],[488,452,20,12],[520,476,12,12], // B default / logs
   [440,264,12,12],[248,148,12,12] // Lobby / spawn cover outside buy zones
  ].map(r=>({...rect(r),type:'wall',cover:true}));
+ // Buy-phase playable sides follow corridors up to the approach barriers.
+ const PREP_AREAS=[
+  [[336,48,60,64],[396,96,36,12],[336,108,96,84],[212,136,220,44],[220,176,24,48],
+   [408,176,24,112],[408,248,84,80],[464,320,28,40],[168,200,48,112],[184,300,28,40],
+   [64,316,148,20],[212,212,96,28],[268,236,40,28]],
+  [[80,336,92,120],[168,360,80,40],[224,336,24,44],[192,396,32,64],[192,436,56,24],
+   [64,456,152,24],[148,440,24,32],[168,476,24,52],[168,508,88,24],[232,448,24,88],
+   [236,360,124,32],[304,388,32,52],[308,416,80,44],[368,436,40,24],
+   [448,392,32,24],[392,400,144,92],[532,424,36,68],[256,500,76,88],[240,508,16,80],
+   [248,508,188,24],[412,456,24,60],[272,472,60,40],[308,448,24,36]]
+ ].map(side=>side.map(rect));
+ const PREP_BARRIERS=[[80,336,132,0],[268,264,40,0],[408,276,0,52],[464,360,28,0],
+  [224,336,24,0],[236,360,124,0],[448,392,32,0]].map(rect);
+ function prepContains(p,side,radius=15){
+  const areas=PREP_AREAS[side];if(!areas)return false;
+  const point=(x,y)=>areas.some(r=>x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h);
+  if(!point(p.x,p.y))return false;
+  for(let i=0;i<8;i++){const a=i*Math.PI/4;if(!point(p.x+Math.cos(a)*radius,p.y+Math.sin(a)*radius))return false;}
+  return true;
+ }
+ function constrainPrep(p,side){
+  if(prepContains(p,side)){p._prepSafe={x:p.x,y:p.y};return;}
+  const safe=p._prepSafe;
+  const fallback=safe&&prepContains(safe,side)?safe:SPAWN_ANCHORS[side];p.x=fallback.x;p.y=fallback.y;
+ }
  const CALLOUTS=[['A MAIN',152,326],['A LOBBY',191,250],['MID TOP',250,224],
   ['CATWALK',237,304],['MID',312,342],['TREE',203,380],['GARDEN',207,422],
   ['RAFTERS',116,468],['MARKET',350,442],['MID LINK',377,310],
@@ -113,7 +138,7 @@
     if(lost){p.loadout={primary:null,secondary:fresh('v_classic')};p.shieldType=null;p.shield=0;p.shieldPool=0;}
     for(const slot of ['primary','secondary'])if(p.loadout?.[slot])p.loadout[slot]=fresh(p.loadout[slot].id);
     p.weapon=null;p.activeSlot=null;equip(p,p.loadout.primary?'primary':'secondary');p.purchases={};p._shieldDelay=0;
-    p.hp=100;p.maxHp=100;p.isDead=false;p.isDowned=false;p.isMoving=false;p.isShooting=false;p._spikeUse=false;p.isReloading=false;
+    p._prepSafe={x:p.x,y:p.y};p.hp=100;p.maxHp=100;p.isDead=false;p.isDowned=false;p.isMoving=false;p.isShooting=false;p._spikeUse=false;p.isReloading=false;
     p.equippedBodyArmor=null;p.equippedHelmet=null;
     this.spawns[p.id]={x:p.x,y:p.y};
    }
@@ -121,7 +146,7 @@
    const carrier=attackers.find(p=>!p.id.startsWith('bot_'))||attackers[0];
    this.bomb={carrier:carrier?.id||null,x:carrier?.x||250,y:carrier?.y||1200,planted:false,site:null,timer:45,defuseCheckpoint:0};
   }
-  canBuy(p){return this.phase==='prep'&&alive(p)&&inside(p,this.spawn(p));}
+  canBuy(p){return this.phase==='prep'&&alive(p)&&prepContains(p,this.team(p)===this.attackTeam?0:1);}
   choose(p,id){return this.buy(p,id);}
   buy(p,id){
    if(!this.canBuy(p))return false;const w=catalog()[id],a=gear()[id];if(!w&&!a)return false;
@@ -149,7 +174,7 @@
    if(this.phase==='finished')return;
    if(this.phase==='end'){if(this.time<=0)this.begin();return;}
    if(this.phase==='prep'){
-    for(const p of this.actors())if(alive(p)){const r=this.spawn(p);p.x=Math.max(r.x+15,Math.min(r.x+r.w-15,p.x));p.y=Math.max(r.y+15,Math.min(r.y+r.h-15,p.y));p.isShooting=false;}
+    for(const p of this.actors())if(alive(p)){constrainPrep(p,this.team(p)===this.attackTeam?0:1);p.isShooting=false;}
     if(this.time<=0){this.phase='live';this.time=100;}return;
    }
    const players=this.actors(),b=this.bomb;
@@ -179,5 +204,5 @@
   }
   snapshot(viewer){const visible=!viewer||this.bomb.planted||viewer.teamId===`team_${this.attackTeam}`;return {round:this.round,phase:this.phase,time:this.time,score:this.score,attackTeam:this.attackTeam,result:this.result,winnerTeam:this.winnerTeam,targetScore:13,bomb:visible?{...this.bomb}:{planted:false,hidden:true},progress:visible?this.progress:0,actor:visible?this.actor:null,spawns:this.spawns,actors:this.actors().map(p=>({id:p.id,teamId:p.teamId,hp:p.hp,isDead:p.isDead,kills:p.kills||0,deaths:p.deaths||0,weapon:p.weapon,clipAmmo:p.clipAmmo,reserveAmmo:p.reserveAmmo,maxHp:p.maxHp,credits:p.credits,shield:p.shield,shieldType:p.shieldType,shieldPool:p.shieldPool,activeSlot:p.activeSlot,loadout:copy(p.loadout),purchases:copy(p.purchases)}))};}
  }
- root.SpikeRules={weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SPAWN_ANCHORS,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
+ root.SpikeRules={weaponSpeed,movingSpread,equip,shieldDamage,bulletDamage,Match,SIZE,UNITS_PER_METER,MOVE_MPS,QUIET_MPS,movementDistance,SPAWNS,SPAWN_ANCHORS,PREP_AREAS,PREP_BARRIERS,prepContains,constrainPrep,SITES,WALLS,FLOORS,COVERS,CALLOUTS,MAP_NAME,inside};
 })(globalThis);

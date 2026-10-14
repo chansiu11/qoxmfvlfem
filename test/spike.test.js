@@ -9,7 +9,7 @@ const {Match,SITES,SPAWNS}=globalThis.SpikeRules;
 const actors=()=>[{id:'a',teamId:'team_1',hp:200,weapon:'ar'},{id:'b',teamId:'team_2',hp:200,weapon:'ar'}];
 function tick(m,n){for(let i=0;i<Math.ceil(n/.05);i++)m.tick(.05);}
 function live(){const p=actors(),m=new Match(()=>p);tick(m,30.1);return {p,m};}
-test('30-second prep confines teams to spawn and only permits valid pre-round weapons',()=>{const p=actors(),m=new Match(()=>p);p[0].credits=5000;assert(m.choose(p[0],'v_operator'));assert.equal(p[0].clipAmmo,5);p[0].x=900;assert.equal(m.choose(p[0],'v_bucky'),false);m.tick(.05);assert(p[0].x<=SPAWNS[0].x+SPAWNS[0].w-20);tick(m,30.1);assert.equal(m.phase,'live');assert.equal(m.choose(p[0],'v_vandal'),false);});
+test('30-second prep confines teams to their preparation side and permits valid purchases',()=>{const p=actors(),m=new Match(()=>p);p[0].credits=5000;assert(m.choose(p[0],'v_operator'));assert.equal(p[0].clipAmmo,5);p[0].x=900;assert.equal(m.choose(p[0],'v_bucky'),false);m.tick(.05);assert(p[0].x<=SPAWNS[0].x+SPAWNS[0].w-20);tick(m,30.1);assert.equal(m.phase,'live');assert.equal(m.choose(p[0],'v_vandal'),false);});
 test('plant requires carrying the spike, a site and four seconds without moving',()=>{const {p,m}=live();const a=p[0];a._spikeUse=true;tick(m,5);assert(!m.bomb.planted);Object.assign(a,{x:SITES[0].x,y:SITES[0].y});tick(m,2);a.isMoving=true;m.tick(.05);assert.equal(m.progress,0);a.isMoving=false;tick(m,4.1);assert(m.bomb.planted);assert.equal(m.bomb.site,'A');assert.equal(m.phase,'planted');});
 test('seven-second defuse wins, next round respawns both teams and switches sides',()=>{const {p,m}=live();Object.assign(p[0],{x:SITES[1].x,y:SITES[1].y,_spikeUse:true});tick(m,4.1);Object.assign(p[1],{x:m.bomb.x,y:m.bomb.y,_spikeUse:true});tick(m,7.1);assert.equal(m.phase,'end');assert.equal(m.score[1],1);p[0].hp=0;p[0].isDead=true;tick(m,6.1);assert.equal(m.round,2);assert.equal(m.phase,'prep');assert.equal(m.attackTeam,2);assert.equal(p[0].hp,100);assert.equal(p[0].isDead,false);});
 test('planted spike survives attackers dying, explodes; no-plant timeout favors defenders',()=>{let {p,m}=live();Object.assign(p[0],{x:SITES[0].x,y:SITES[0].y,_spikeUse:true});tick(m,4.1);p[0].hp=0;p[0].isDead=true;tick(m,1);assert.equal(m.phase,'planted');tick(m,45);assert.equal(m.score[0],1);({m}=live());tick(m,100.1);assert.equal(m.score[1],1);});
@@ -287,4 +287,20 @@ test('tactical attacker follows Ascent route and completes planting without idle
  const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='3';document.getElementById('aiDifficultySelect').value='easy';hostStartGame();spikeMatch.phase='live';spikeMatch.time=100;myPlayer.isDead=true;myPlayer.hp=0;globalThis.carrier=aiBots.find(p=>p.teamId==='team_'+spikeMatch.attackTeam);spikeMatch.bomb.carrier=carrier.id;chooseBotEnemy=()=>null;spikeState=spikeMatch.snapshot();spikeFrameDt=1/30;`);
  const planted=h.run(`(()=>{for(let i=0;i<2100&&!spikeMatch.bomb.planted;i++){SpikeTactics.tick();spikeMatch.tick(1/30);spikeState=spikeMatch.snapshot();}return spikeMatch.bomb.planted})()`);
  assert.equal(planted,true);
+});
+
+test('buy-phase sides include approach geometry, reject cross-barrier movement and permit forward buying',()=>{
+ const R=globalThis.SpikeRules,k=R.SIZE/640;
+ const a={x:128*k,y:321*k},d={x:458*k,y:412*k};
+ assert(R.prepContains(a,0));assert(!R.prepContains(a,1));assert(R.prepContains(d,1));assert(!R.prepContains(d,0));
+ const {p,m}=live();m.phase='prep';Object.assign(p[0],a);assert(m.canBuy(p[0]));m.tick(.01);assert.equal(p[0].x,a.x);
+ Object.assign(p[0],d);m.tick(.01);assert.equal(p[0].x,a.x);
+ const h=harness();h.run(`selectedMode='spike';spikeState={phase:'prep',attackTeam:1};myPlayer.teamId='team_1';obstacles=[]`);
+ assert.equal(h.run(`checkObstacleCollision(${128*k},${350*k},15)`),true);
+ h.run("spikeState.phase='live'");assert.equal(h.run(`checkObstacleCollision(${128*k},${350*k},15)`),false);
+});
+test('bots select tactical staging goals and reach them before the buy phase ends',()=>{
+ const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='5';hostStartGame();spikeFrameDt=1/30;`);
+ const result=h.run(`(()=>{for(let i=0;i<840;i++){SpikeTactics.tick();spikeMatch.tick(1/30);spikeState=spikeMatch.snapshot();}return aiBots.map(bot=>({valid:SpikeRules.prepContains(bot,spikePrepSide(bot)),distance:Math.hypot(bot.x-bot._prepGoal.x,bot.y-bot._prepGoal.y),use:bot._spikeUse,state:bot._brain.state}))})()`);
+ for(const bot of result){assert(bot.valid);assert(bot.distance<70,JSON.stringify(bot));assert.equal(bot.use,false);assert(bot.state.startsWith('prep_'));}
 });

@@ -17,11 +17,11 @@ spikeShopStyle.textContent=`
 `;
 document.body.appendChild(spikeShopStyle);
 const spikeShop=document.createElement('section');spikeShop.id='spikeShop';spikeShop.setAttribute('role','dialog');spikeShop.setAttribute('aria-label','장비 구매');spikeShop.setAttribute('aria-modal','true');
-spikeShop.innerHTML='<header><div><small>FIELD ARMORY / 일반게임</small><h2>장비 구매</h2></div><div><span id="shopCredits" class="shop-credit"></span><br><small id="shopClock"></small></div><button class="shop-close" onclick="spikeToggleShop(false)">닫기 ×</button></header><div class="shop-layout"><aside id="shopRoster" class="shop-roster"></aside><div id="shopGuns" class="shop-guns"></div><aside><div id="shopArmor"></div><div id="shopDetails" class="shop-details"></div><div id="shopSell"></div></aside></div><footer>준비 시간 · 스폰 지역에서 구매 / 이번 준비 시간에 산 장비만 환불 가능<br>B 닫기 · 1 주무기 · 2 보조무기 / 시작 ¤800 · 처치 +200 · 설치 팀 +300 · 승리 +3000 · 연패 보상 1900 → 2400 → 2900 · 최대 ¤9000</footer>';
+spikeShop.innerHTML='<header><div><small>FIELD ARMORY / 일반게임</small><h2>장비 구매</h2></div><div><span id="shopCredits" class="shop-credit"></span><br><small id="shopClock"></small></div><button class="shop-close" onclick="spikeToggleShop(false)">닫기 ×</button></header><div class="shop-layout"><aside id="shopRoster" class="shop-roster"></aside><div id="shopGuns" class="shop-guns"></div><aside><div id="shopArmor"></div><div id="shopDetails" class="shop-details"></div><div id="shopSell"></div></aside></div><footer>준비 시간 · 준비 구역에서 구매 / 이번 준비 시간에 산 장비만 환불 가능<br>B 닫기 · 1 주무기 · 2 보조무기 / 시작 ¤800 · 처치 +200 · 설치 팀 +300 · 승리 +3000 · 연패 보상 1900 → 2400 → 2900 · 최대 ¤9000</footer>';
 gameFrame.appendChild(spikeShop);
 for(const type of ['pointerdown','pointerup','mousedown','mouseup','touchstart','touchend','contextmenu'])spikeShop.addEventListener(type,e=>{e.stopPropagation();if(type==='contextmenu')e.preventDefault();});
 function spikeToggleShop(open=!spikeShopOpen){
- if(open&&(selectedMode!=='spike'||spikeState?.phase!=='prep'||myPlayer.isDead||!SpikeRules.inside(myPlayer,spikeSpawn(myPlayer))))return;
+ if(open&&(selectedMode!=='spike'||spikeState?.phase!=='prep'||myPlayer.isDead||!SpikeRules.prepContains(myPlayer,spikePrepSide(myPlayer))))return;
  spikeShopOpen=!!open;spikeShop.style.display=spikeShopOpen?'block':'none';myPlayer.isShooting=false;myPlayer.isAiming=false;spikeHeld=false;spikeShopRenderKey='';
  if(spikeShopOpen){spikeShopRefresh();document.querySelector?.('#spikeShop .shop-close')?.focus();}
 }
@@ -40,7 +40,7 @@ function spikeShopRefresh(){
  if(selectedMode!=='spike'||!gameStarted||gameEnded||spikeState?.phase!=='prep'||myPlayer.isDead){if(spikeShopOpen)spikeToggleShop(false);return;}
  if(spikeShopRound!==spikeState.round){spikeShopRound=spikeState.round;spikeToggleShop(true);return;}
  if(!spikeShopOpen)return;
- if(!SpikeRules.inside(myPlayer,spikeSpawn(myPlayer))){spikeToggleShop(false);return;}
+ if(!SpikeRules.prepContains(myPlayer,spikePrepSide(myPlayer))){spikeToggleShop(false);return;}
  document.getElementById('shopClock').textContent=`구매 종료까지 ${Math.max(0,Math.ceil(spikeState.time))}초`;
  document.getElementById('shopCredits').textContent=`¤ ${(myPlayer.credits||0).toLocaleString()}`;
  const key=JSON.stringify([myPlayer.credits,myPlayer.loadout,myPlayer.shieldType,myPlayer.shield,myPlayer.shieldPool,myPlayer.purchases,spikeState.actors?.map(p=>[p.id,p.credits])]);if(key===spikeShopRenderKey)return;spikeShopRenderKey=key;

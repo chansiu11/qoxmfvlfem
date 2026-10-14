@@ -4,6 +4,14 @@ let spikeFrameDt=1/60;
 let spikeMatch=null,spikeState=null,spikeHeld=false,spikeLastTick=performance.now(),spikeAppliedRound=0;
 const spikeActors=()=>[...roomHumans(),...aiBots].filter(p=>!isAssignedSpectator(p.id));
 const spikeSpawn=p=>SpikeRules.SPAWNS[p.teamId===`team_${spikeState?.attackTeam||1}`?0:1];
+const spikePrepSide=p=>p.teamId===`team_${spikeState?.attackTeam||1}`?0:1;
+let spikePrepActor=null;
+const oldPlayerCollision=checkObstacleCollision;
+checkObstacleCollision=(x,y,r=15)=>oldPlayerCollision(x,y,r)||(selectedMode==='spike'&&spikeState?.phase==='prep'&&!SpikeRules.prepContains({x,y},spikePrepSide(myPlayer),r));
+const oldBotCollision=checkBotNavigationCollision;
+checkBotNavigationCollision=(x,y,r=15)=>oldBotCollision(x,y,r)||(spikePrepActor&&!SpikeRules.prepContains({x,y},spikePrepSide(spikePrepActor),r));
+const oldBotSegment=botSegmentClear;
+botSegmentClear=(a,b)=>{if(!oldBotSegment(a,b))return false;if(spikePrepActor){const n=Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/20);for(let i=0;i<=n;i++){const t=i/Math.max(1,n);if(!SpikeRules.prepContains({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t},spikePrepSide(spikePrepActor)))return false;}}return true;};
 const originalMap=generateMapData;
 generateMapData=(mode,seed)=>mode==='spike'?{seed,worldSize:SpikeRules.SIZE,obstacles:SpikeRules.WALLS.map(w=>({...w})),items:[]}:originalMap(mode,seed);
 const originalTeam=applyEntityTeam;
@@ -123,7 +131,7 @@ update=()=>{
  if(spikeState?.phase==='prep'||['end','finished'].includes(spikeState?.phase)||spikeHeld)myPlayer.isShooting=false;
  originalUpdate();
  if(isHost&&spikeMatch?.phase==='prep')for(const bot of aiBots)if(bot._boughtRound!==spikeMatch.round){bot._boughtRound=spikeMatch.round;for(const id of ['v_vandal','v_spectre','v_ghost'])if(spikeMatch.buy(bot,id))break;spikeMatch.buy(bot,bot.credits>=1000?'heavy':'light');}
- if(spikeState?.phase==='prep'){const r=spikeSpawn(myPlayer);myPlayer.x=Math.max(r.x+15,Math.min(r.x+r.w-15,myPlayer.x));myPlayer.y=Math.max(r.y+15,Math.min(r.y+r.h-15,myPlayer.y));}
+ if(spikeState?.phase==='prep')SpikeRules.constrainPrep(myPlayer,spikePrepSide(myPlayer));
  if(isHost&&spikeMatch){for(const p of Object.values(remotePlayers))if(Date.now()-(p._inputAt||0)>700)p._spikeUse=false;const prev=spikeMatch.round;spikeMatch.tick(dt);spikeState=spikeMatch.snapshot();if(['end','finished'].includes(spikeState.phase))bullets.length=0;if(prev!==spikeMatch.round)spikeApply(spikeState);}
  spikeUI();
  if(isHost&&spikeState?.phase==='finished'&&spikeState.time<=0)returnToRoomAfterGame();
@@ -149,7 +157,7 @@ function spikeRoundBanner(){
  if(now>spikeBannerUntil){spikeBanner.style.display='none';return;}
  const observer=isAssignedSpectator(myPlayer.id),win=myPlayer.teamId===`team_${s.winnerTeam}`;
  let title='',sub='',color='#66e4d0';
- if(s.phase==='prep'){title=s.round===1?'게임 시작 · 준비 시간':`${s.round}라운드 준비`;sub=`${Math.ceil(Math.max(0,s.time))}초 후 시작 · 스폰에서 총기 선택 · 13점 선승`;}
+ if(s.phase==='prep'){title=s.round===1?'게임 시작 · 준비 시간':`${s.round}라운드 준비`;sub=`${Math.ceil(Math.max(0,s.time))}초 후 시작 · 준비 구역에서 구매 · 진입로에 대기 · 13점 선승`;}
  if(s.phase==='live'){title='라운드 시작';sub=myPlayer.teamId===`team_${s.attackTeam}`?'공격 · A/B에 스파이크를 설치하세요':'수비 · 설치를 막고 스파이크를 해체하세요';}
  if(s.phase==='planted'){title='스파이크 설치됨';sub=`${s.bomb.site} 지점 · 폭발까지 ${Math.ceil(s.time)}초`;color='#ffc56a';}
  if(['end','finished'].includes(s.phase)){title=(s.phase==='finished'?'게임 종료 · ':'라운드 ')+(observer?`팀 ${s.winnerTeam} 승리`:win?'승리':'패배');color=observer||win?'#66e4d0':'#ff7684';sub=`${s.result} · ${s.score[0]} : ${s.score[1]} · ${Math.ceil(Math.max(0,s.time))}초 후 ${s.phase==='finished'?'대기실 복귀':'다음 라운드'}`;}
@@ -184,7 +192,7 @@ function spikeUI(){
  document.getElementById('spikeStatus').textContent=`어센트 · ${s.round}라운드 | 청록 ${s.score[0]} : ${s.score[1]} 코랄 | ${attacking?'공격':'수비'} | ${s.phase==='prep'?'준비':s.phase==='planted'?'폭발까지':['end','finished'].includes(s.phase)?s.result:'라운드'} ${Math.max(0,Math.ceil(s.time))}초`;
  document.getElementById('spikeEconomy').textContent=`¤ ${myPlayer.credits||0} · HP ${Math.ceil(myPlayer.hp)} · 방어구 ${Math.ceil(myPlayer.shield||0)}${myPlayer.shieldType==='regen'?' / 재생 '+Math.ceil(myPlayer.shieldPool||0):''}`;
  const prep=s.phase==='prep'&&!myPlayer.isDead;document.getElementById('spikeWeaponBar').style.display=prep?'block':'none';
- let hint=prep?'B / 구매 버튼 · 스폰에서 장비 구매 · 1 주무기 / 2 보조무기':['end','finished'].includes(s.phase)?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
+ let hint=prep?'B / 구매 버튼 · 준비 구역에서 장비 구매 · 1 주무기 / 2 보조무기':['end','finished'].includes(s.phase)?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
  if(b.planted&&b.defuseCheckpoint>=3.5)hint+=' · 반해체 완료 (50% 저장)';
 
  document.getElementById('spikePrompt').textContent=hint;
@@ -201,6 +209,7 @@ function drawSpikeFloor(context){
 }
 function drawSpikeMap(context,scale=1){
  if(selectedMode!=='spike')return;context.save();context.scale(scale,scale);context.textAlign='center';context.textBaseline='middle';
+ if(spikeState?.phase==='prep'){for(let side=0;side<2;side++){context.fillStyle=side?'#4d708522':'#af784322';for(const r of SpikeRules.PREP_AREAS[side])context.fillRect(r.x,r.y,r.w,r.h);}context.strokeStyle='#7cddff';context.lineWidth=7;for(const r of SpikeRules.PREP_BARRIERS){context.beginPath();context.moveTo(r.x,r.y);context.lineTo(r.x+r.w,r.y+r.h);context.stroke();}}
  for(let i=0;i<2;i++){const r=SpikeRules.SPAWNS[i];context.fillStyle=i?'#4d708533':'#af784333';context.fillRect(r.x,r.y,r.w,r.h);context.strokeStyle=i?'#77beed':'#ffc270';context.lineWidth=3;context.strokeRect(r.x,r.y,r.w,r.h);context.fillStyle='white';context.font='bold 25px sans-serif';context.fillText(i?'수비 스폰':'공격 스폰',SpikeRules.SPAWN_ANCHORS[i].x,SpikeRules.SPAWN_ANCHORS[i].y);}
  if(scale>=.2){context.fillStyle='#e8dfce';context.font='bold 22px sans-serif';for(const c of SpikeRules.CALLOUTS)context.fillText(c.name,c.x,c.y);}
  for(const s of SpikeRules.SITES){context.fillStyle='#dbb45422';context.strokeStyle='#ffce67';context.beginPath();context.arc(s.x,s.y,s.r,0,Math.PI*2);context.fill();context.stroke();context.fillStyle='#ffdb8b';context.font='bold 60px sans-serif';context.fillText(s.name,s.x,s.y);}

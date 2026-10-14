@@ -3,7 +3,7 @@
 Scope: general/spike mode only. Deathmatch and battle royale keep their loadouts, HP and armor rules.
 
 ## Player flow
-- 30-second preparation, shop opens at each round start. B or the shop button opens/closes it; purchases require being alive in own spawn during prep.
+- 30-second preparation, shop opens at each round start. B or the shop button opens/closes it; purchases require being alive in own preparation side during prep.
 - 1/2 and the on-screen weapon buttons switch primary/secondary. Tab opens the store in general mode.
 - Start at 800 credits with a Classic and 100 HP. Credit limit 9000.
 - Kill +200, plant +300 for the attacking team, round win +3000, consecutive losses +1900/+2400/+2900.

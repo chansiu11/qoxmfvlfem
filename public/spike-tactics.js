@@ -43,9 +43,26 @@
   updateHumanBotAim(bot,brain,enemy,{...diff,spread:Math.min(.22,diff.spread)},now,dt);
  }
  function tick(){
-  if(!isHost||!spikeMatch||!['live','planted'].includes(spikeState?.phase))return;
+  if(!isHost||!spikeMatch||!['prep','live','planted'].includes(spikeState?.phase))return;
   const now=Date.now(),dt=Math.max(.001,spikeFrameDt),actors=aliveActors(),bomb=spikeMatch.bomb;
   if(!planner||planner.round!==spikeMatch.round){planner=new Planner(spikeMatch.round,spikeMatch.attackTeam);for(const bot of aiBots){bot._tacticRoute=null;bot._retakeWaitAt=0;bot._duelStart=0;bot._duelCover=null;const brain=ensureBotBrain(bot);brain.observed=null;brain.scanAt=0;brain.targetId=null;brain.lastSeenAt=0;brain.burstLeft=0;brain.burstPauseUntil=0;bot.investigateTarget=null;}}
+  if(spikeState.phase==='prep'){
+   planner.started=0;
+   const carrier=actors.find(p=>p.id===bomb.carrier),human=carrier&&!carrier.id.startsWith('bot_');
+   const chosen=human?SpikeRules.SITES.reduce((a,b)=>distance(carrier,a)<distance(carrier,b)?a:b):SpikeRules.SITES[planner.site];
+   const siteIndex=SpikeRules.SITES.indexOf(chosen),scale=SpikeRules.SIZE/640;
+   for(const bot of aiBots){if(!live(bot))continue;const brain=ensureBotBrain(bot),team=teamNumber(bot),attack=team===planner.attackTeam;
+    const friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
+    const split=planner.style==='split'&&index%2===1&&bomb.carrier!==bot.id;
+    const base=attack?(split?{x:288*scale,y:250*scale}:siteIndex===0?{x:128*scale,y:321*scale}:{x:478*scale,y:346*scale}):index%3===2?{x:316*scale,y:376*scale}:index%2?{x:458*scale,y:412*scale}:{x:130*scale,y:358*scale};
+    const candidates=[{x:base.x+(index%3-1)*35,y:base.y+Math.floor(index/3)*35},base];
+    const goal=candidates.find(p=>SpikeRules.prepContains(p,attack?0:1)&&!oldBotCollision(p.x,p.y,18))||base;
+    bot._prepGoal=goal;bot._spikeUse=false;bot.isShooting=false;stop(bot,brain);brain.state=attack?(split?'prep_split':'prep_entry'):'prep_hold';
+    if(distance(bot,goal)>25){spikePrepActor=bot;try{move(bot,brain,goal);}finally{spikePrepActor=null;}}
+    watch(bot,brain,attack?chosen:call(index%2?'B MAIN':'A MAIN'),dt);
+   }
+   return;
+  }
   // Vision uses the existing field of view and wall test. Shared reports retain last seen positions only.
   const observed=new Map();
   for(const bot of aiBots){if(!live(bot))continue;const brain=ensureBotBrain(bot);bot._spikeUse=false;bot.isShooting=false;const enemy=chooseBotEnemy(bot,brain);if(enemy){observed.set(bot.id,enemy);planner.report(teamNumber(bot),enemy,now);}}

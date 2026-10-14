@@ -9,3 +9,5 @@ Combat alternates a short lateral reposition, settling, and stationary bursts. R
 References: Riot, VALORANT Patch Notes 3.0 (stopping before shooting and walking accuracy); Riot, Peeking into VALORANT's Netcode (movement accuracy and angle holding); Red Bull Campus Clutch map strategies and Ascent guide (Mid control, split attacks, rotations).
 
 Tests cover expiring/team-private reports, evidence-based rotations, planting, one defuser, stationary firing, and actual pathfinding from spawn through a site approach to completed planting. Browser/device playtests are not represented by the Node simulation.
+
+During the 30-second preparation phase, bots now choose and travel to staging positions based on the same round plan: attacking A/B approaches or Mid Top for split entry, defending A/B site entrances or Mid Bottom. Navigation checks the entire path against the team's preparation area, so shortcuts through neutral/enemy territory are rejected. Bots hold and watch the approach when they reach their target. Purchases are valid throughout the connected preparation side.
