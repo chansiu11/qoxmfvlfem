@@ -390,3 +390,16 @@ test('visible enemy combat also caps teammates firing from the same angle',()=>{
  assert.equal(h.run('attempts.length'),2);
  assert.equal(h.run('aiBots.filter(p=>p._angleOverflow).length'),4);
 });
+test('spectator switches both ways across modes, ignores hidden snapshots and updates camera',()=>{
+ for(const mode of ['spike','br','normal']){const h=harness();h.run(`selectedMode='${mode}';myPlayer.id='viewer';myPlayer.isDead=true;myPlayer.hp=0;isSpectating=true;spectatorIds.add('viewer');remotePlayers.a={id:'a',name:'A',x:100,y:200,hp:100};aiBots.push({id:'bot_b',name:'B',x:800,y:900,hp:100},{id:'bot_hidden',hp:100,hiddenPrep:true,x:-10000,y:-10000});findNextSpectateTarget();`);
+ assert.equal(h.run('spectateTarget.id'),'a');h.run('findNextSpectateTarget(1)');assert.equal(h.run('spectateTarget.id'),'bot_b');assert.equal(h.run('camera.x'),800);
+ h.run('findNextSpectateTarget(-1)');assert.equal(h.run('spectateTarget.id'),'a');h.run("remotePlayers.a={...remotePlayers.a,x:300};findNextSpectateTarget(1);findNextSpectateTarget(1)");assert.equal(h.run('camera.x'),300);
+ h.run('remotePlayers.a.hp=0;findNextSpectateTarget()');assert.equal(h.run('spectateTarget.id'),'bot_b');h.run('aiBots[0].isDead=true;findNextSpectateTarget()');assert.equal(h.run('spectateTarget'),null);
+ assert(h.html.includes('width:100%;height:100%;z-index:35'));assert(h.html.includes("e.key==='ArrowLeft'"));
+ }
+});
+test('defense patrol changes position on a bounded cycle and refuses blocked peeks',()=>{
+ const h=harness();h.run(`globalThis.patrolBot={id:'bot_patrol',x:1000,y:1000};globalThis.slot={id:'test',position:{x:1000,y:1000},target:{x:1500,y:1000}};checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;globalThis.first=SpikeTactics.patrolGoal(patrolBot,slot,.05);for(let i=0;i<120;i++)SpikeTactics.patrolGoal(patrolBot,slot,.05);globalThis.second=SpikeTactics.patrolGoal(patrolBot,slot,.05);`);
+ assert(h.run('Math.hypot(first.x-second.x,first.y-second.y)>100'));
+ h.run('checkBotNavigationCollision=()=>true;patrolBot._patrol=null');assert.equal(h.run('SpikeTactics.patrolGoal(patrolBot,slot,.05).x'),1000);
+});
