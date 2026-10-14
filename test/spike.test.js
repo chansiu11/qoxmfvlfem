@@ -363,3 +363,18 @@ test('teammates reserve distinct site angles, retain them while moving, and reus
  h.run(`squad[1].isDead=true;globalThis.newcomer={...squad[1],id:'bot_new',isDead:false};squad.push(newcomer);globalThis.replacement=SpikeTactics.assignAngle(newcomer,'angle:A',SpikeTactics.angleOptions('A'),squad)`);
  assert.equal(h.run('replacement.id'),h.run('angles[1].id'));
 });
+
+test('pre-round opponents are hidden with silent footsteps and private spawn coordinates',()=>{
+ const h=harness();h.run(`selectedMode='spike';spikeState={phase:'prep',attackTeam:1};myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.hp=100;myPlayer.isDead=false;globalThis.enemy={...myPlayer,id:'opponent',teamId:'team_2',x:myPlayer.x+20,y:myPlayer.y};remotePlayers.opponent=enemy;hasLineOfSight=()=>true;`);
+ assert.equal(h.run('shouldRenderCombatEntityToLocal(enemy)'),false);
+ assert.equal(h.run("spikeCanHearStep(myPlayer,{entityId:'opponent'})"),false);
+ assert.equal(h.run("spikeCanHearStep(myPlayer,{entityId:'me'})"),true);
+ h.run("spikeState.phase='live'");assert.equal(h.run('shouldRenderCombatEntityToLocal(enemy)'),true);assert.equal(h.run("spikeCanHearStep(myPlayer,{entityId:'opponent'})"),true);
+ const players=actors(),match=new Match(()=>players),snap=match.snapshot(players[0]);assert(snap.spawns.a);assert.equal(snap.spawns.b,undefined);
+});
+test('bot fire rechecks the live enemy behind walls and outside its current field of view',()=>{
+ const h=harness();h.run(`selectedMode='spike';spikeState={phase:'live'};isHost=true;myPlayer.id='target';myPlayer.teamId='team_2';myPlayer.hp=100;myPlayer.isDead=false;myPlayer.x=1400;myPlayer.y=1200;globalThis.bot={...myPlayer,id:'bot_vision',teamId:'team_1',x:1200,y:1200,angle:0,weapon:'v_vandal',clipAmmo:25,isReloading:false,_brain:{targetId:'target'}};aiBots.push(bot);obstacles=[{type:'wall',x:1300,y:1100,w:20,h:200}];shoot(bot);`);
+ assert.equal(h.run('bot.clipAmmo'),25);
+ h.run(`obstacles=[];myPlayer.x=1100;shoot(bot)`);assert.equal(h.run('bot.clipAmmo'),25);
+ h.run(`myPlayer.x=1400;shoot(bot)`);assert.equal(h.run('bot.clipAmmo'),24);
+});

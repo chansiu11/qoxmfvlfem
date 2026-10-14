@@ -135,7 +135,7 @@
   },i*850));
  });};panel.appendChild(testButton);document.body.appendChild(panel);
  const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);const kind=weapon||p?.weapon||'ar';emit(kind,{x,y},1,'shot:'+id);};
- playNearbyStep=(distance,range,event)=>{if(range<=0||distance>=range)return;emit('step',event?{x:event.x,y:event.y,range}:null,event?.entityId===myPlayer.id ? .35 : 1,event?'step:'+event.entityId:'nearby-step');};
+ playNearbyStep=(distance,range,event)=>{const listener=isSpectating&&spectateTarget?spectateTarget:myPlayer;if(typeof spikeCanHearStep==='function'&&!spikeCanHearStep(listener,event))return;if(range<=0||distance>=range)return;emit('step',event?{x:event.x,y:event.y,range}:null,event?.entityId===myPlayer.id ? .35 : 1,event?'step:'+event.entityId:'nearby-step');};
  let previous=null,lastTick=0,lastBeep=0,lastStep=0;const remoteAudio=new Map();
  function poll(){
   for(const item of activeSpatial)updateSpatial(item.node,item.position);
@@ -178,7 +178,7 @@
   const aliveIds=new Set();
   for(const p of [...Object.values(typeof remotePlayers==='undefined'?{}:remotePlayers),...(typeof aiBots==='undefined'?[]:aiBots)]){
    aliveIds.add(p.id);const prev=remoteAudio.get(p.id);
-   if(prev&&!p.isDead){if(p.isReloading&&!prev.reload)emit('reload',p,.7,'reload:'+p.id);if(!p.isReloading&&prev.reload&&p.clipAmmo>prev.clip)emit('ready',p,.7,'ready:'+p.id);if(p.hp<prev.hp)emit('hit',p,.5,'hit:'+p.id);}
+   if(prev&&!p.isDead&&!(typeof spikePrepHidden==='function'&&spikePrepHidden(p))){if(p.isReloading&&!prev.reload)emit('reload',p,.7,'reload:'+p.id);if(!p.isReloading&&prev.reload&&p.clipAmmo>prev.clip)emit('ready',p,.7,'ready:'+p.id);if(p.hp<prev.hp)emit('hit',p,.5,'hit:'+p.id);}
    remoteAudio.set(p.id,{reload:!!p.isReloading,clip:p.clipAmmo,hp:p.hp});
   }
   for(const id of remoteAudio.keys())if(!aliveIds.has(id))remoteAudio.delete(id);

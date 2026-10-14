@@ -4,6 +4,14 @@ let spikeFrameDt=1/60;
 let spikeMatch=null,spikeState=null,spikeHeld=false,spikeLastTick=performance.now(),spikeAppliedRound=0;
 const spikeActors=()=>[...roomHumans(),...aiBots].filter(p=>!isAssignedSpectator(p.id));
 const spikeSpawn=p=>SpikeRules.SPAWNS[p.teamId===`team_${spikeState?.attackTeam||1}`?0:1];
+function spikePrepHidden(entity,viewer=isSpectating&&spectateTarget?spectateTarget:myPlayer){return selectedMode==='spike'&&!['live','planted','end','finished'].includes(spikeState?.phase)&&entity&&viewer&&entity.id!==viewer.id&&!areAllies(viewer,entity);}
+function spikeCanHearStep(viewer,event){const owner=event&&getCombatEntityById(event.entityId);return selectedMode!=='spike'||['live','planted','end','finished'].includes(spikeState?.phase)||!!owner&&(owner.id===viewer?.id||viewer&&areAllies(viewer,owner));}
+const originalVisibleEntity=shouldRenderCombatEntityToLocal;
+shouldRenderCombatEntityToLocal=entity=>!spikePrepHidden(entity)&&originalVisibleEntity(entity);
+function spikeBotCanFire(bot){const target=getCombatEntityById(bot._brain?.targetId);if(!target||target.hp<=0||target.isDead||areAllies(bot,target))return false;
+ const d=Math.hypot(target.x-bot.x,target.y-bot.y),angle=Math.atan2(target.y-bot.y,target.x-bot.x);
+ return d<=getBotWeaponRange(bot).max&&Math.abs(botAngleDelta(angle,bot.angle))<Math.PI*.42&&hasLineOfSight(bot,target);
+}
 const spikePrepSide=p=>p.teamId===`team_${spikeState?.attackTeam||1}`?0:1;
 let spikePrepActor=null,spikeNavActor=null;
 const oldPlayerCollision=checkObstacleCollision;
@@ -48,14 +56,18 @@ openDeathmatchWeaponModal=(...args)=>{if(selectedMode!=='spike')return originalW
 const originalBotRespawn=respawnBot;
 respawnBot=p=>{if(selectedMode!=='spike')originalBotRespawn(p);};
 const originalShoot=shoot;
-shoot=(p,spread,shotId)=>{if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p._semiLatch)return;const ammo=p.clipAmmo;const result=originalShoot(p,spread,shotId);if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p.clipAmmo<ammo)p._semiLatch=true;return result;};
+shoot=(p,spread,shotId)=>{if(selectedMode==='spike'&&p.id?.startsWith('bot_')&&!spikeBotCanFire(p))return;if(selectedMode==='spike'&&(!['live','planted'].includes(spikeState?.phase)||p.isDead||p.hp<=0||p._spikeUse))return;if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p._semiLatch)return;const ammo=p.clipAmmo;const result=originalShoot(p,spread,shotId);if(selectedMode==='spike'&&p===myPlayer&&WEAPONS[p.weapon]?.semi&&p.isShooting&&p.clipAmmo<ammo)p._semiLatch=true;return result;};
 // Mouse release must be handled even when it happens over a HUD or outside the canvas.
 window.addEventListener('mouseup',e=>{if(isMobile)return;if(e.button===0){myPlayer.isShooting=false;myPlayer._semiLatch=false;}if(e.button===2)myPlayer.isAiming=false;});
 window.addEventListener('blur',()=>{myPlayer.isShooting=false;myPlayer.isAiming=false;myPlayer._semiLatch=false;});
 const originalEntity=networkEntityState;
 networkEntityState=p=>{const state=originalEntity(p);if(selectedMode==='spike'){state._spikeUse=p===myPlayer?spikeHeld:!!p._spikeUse;state._spikeRound=spikeAppliedRound;state.moveSpeed=Number.isFinite(p.moveSpeed)?p.moveSpeed:undefined;}return state;};
 const originalSend=safeSend;
-safeSend=(c,data)=>{if(selectedMode==='spike'&&isHost&&data?.type==='SYNC'&&spikeMatch)data={...data,spike:spikeMatch.snapshot(getCombatEntityById(c.playerId)||{teamId:"spectator"})};return originalSend(c,data);};
+safeSend=(c,data)=>{if(selectedMode==='spike'&&isHost&&data?.type==='SYNC'&&spikeMatch){const viewer=getCombatEntityById(c.playerId)||{teamId:'spectator'};data={...data,spike:spikeMatch.snapshot(viewer)};
+ if(spikeMatch.phase==='prep'){const conceal=p=>p.id===viewer.id||p.teamId===viewer.teamId?p:{id:p.id,name:p.name,teamId:p.teamId,hp:p.hp,maxHp:p.maxHp,isDead:p.isDead,kills:p.kills,deaths:p.deaths,x:-10000,y:-10000,angle:0,isMoving:false,hiddenPrep:true};
+  if(data.players)data.players=data.players.map(conceal);if(data.aiBots)data.aiBots=data.aiBots.map(conceal);
+ }
+ }return originalSend(c,data);};
 function spikeApply(state){
  if(!state)return;spikeState=state;
  for(const actor of state.actors||[]){const p=getCombatEntityById(actor.id);if(p){p.teamId=actor.teamId;if(!isHost){p.credits=actor.credits;p.shield=actor.shield;p.shieldType=actor.shieldType;p.shieldPool=actor.shieldPool;}}}
@@ -125,8 +137,10 @@ getBotWeaponRange=bot=>{
  const category=WEAPONS[bot.weapon]?.category;
  return category==='Sniper'?{ideal:1050,min:450,max:1900,vision:2100}:category==='Shotgun'?{ideal:160,min:60,max:480,vision:1100}:{ideal:600,min:160,max:1300,vision:1500};
 };
+let spikeFootstepPhase=null;
 const originalUpdate=update;
 update=()=>{
+ if(selectedMode==='spike'&&spikeState?.phase!==spikeFootstepPhase){footstepEvents.length=0;footstepTracks.clear();spikeFootstepPhase=spikeState?.phase;}
  if(!myPlayer.isShooting)myPlayer._semiLatch=false;
  if(selectedMode!=='spike'||!gameStarted||gameEnded)return originalUpdate();
  if(spikeShopOpen){myPlayer.isShooting=false;myPlayer.isAiming=false;mobileMoveVec.x=0;mobileMoveVec.y=0;for(const k of ['w','a','s','d'])keys[k]=false;}
