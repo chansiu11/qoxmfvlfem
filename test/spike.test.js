@@ -351,3 +351,15 @@ test('bots sharing a destination maintain personal space along the approach',()=
  const separation=h.run(`(()=>{for(let i=0;i<60;i++)for(const bot of aiBots)SpikeTactics.move(bot,ensureBotBrain(bot),{x:1800,y:1200});return Math.hypot(aiBots[0].x-aiBots[1].x,aiBots[0].y-aiBots[1].y)})()`);
  assert(separation>20,`separation ${separation}`);
 });
+
+test('teammates reserve distinct site angles, retain them while moving, and reuse a fallen ally lane',()=>{
+ const h=harness();h.run(`selectedMode='spike';obstacles=SpikeRules.WALLS.map(p=>({...p}));globalThis.squad=Array.from({length:5},(_,i)=>({...myPlayer,id:'bot_angle_'+i,teamId:'team_1',hp:100,isDead:false,x:SpikeRules.SITES[0].x,y:SpikeRules.SITES[0].y}));globalThis.angles=squad.map(bot=>SpikeTactics.assignAngle(bot,'angle:A',SpikeTactics.angleOptions('A'),squad));`);
+ assert.equal(h.run('new Set(angles.map(p=>p.id)).size'),5);
+ assert.equal(h.run('new Set(angles.map(p=>`${p.target.x},${p.target.y}`)).size'),5);
+ assert.equal(h.run('new Set(angles.map(p=>`${p.position.x},${p.position.y}`)).size'),5);
+ assert(h.run('angles.every(p=>!oldBotCollision(p.position.x,p.position.y,18))'));
+ h.run(`squad[0].x+=300;squad[0].y+=200;globalThis.again=SpikeTactics.assignAngle(squad[0],'angle:A',SpikeTactics.angleOptions('A'),squad)`);
+ assert.equal(h.run('again.id'),h.run('angles[0].id'));
+ h.run(`squad[1].isDead=true;globalThis.newcomer={...squad[1],id:'bot_new',isDead:false};squad.push(newcomer);globalThis.replacement=SpikeTactics.assignAngle(newcomer,'angle:A',SpikeTactics.angleOptions('A'),squad)`);
+ assert.equal(h.run('replacement.id'),h.run('angles[1].id'));
+});
