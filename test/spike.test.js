@@ -327,3 +327,13 @@ test('semi-auto fire unlocks on release and weapon switching instead of remainin
  h.run(`myPlayer.loadout={secondary:{id:'v_ghost',clip:15,reserve:60}};myPlayer.activeSlot=null;SpikeRules.equip(myPlayer,'secondary');shoot(myPlayer)`);
  assert.equal(h.run('myPlayer.clipAmmo'),14);
 });
+
+test('individual bot tendencies stay stable while routes and combat rhythms differ between identities',()=>{
+ const h=harness();const profiles=h.run(`Array.from({length:12},(_,i)=>SpikeTactics.profile('bot_'+i))`);
+ assert.equal(new Set(profiles.map(p=>p.cycle)).size,12);
+ assert.equal(new Set(profiles.map(p=>p.startDelay)).size,12);
+ assert.equal(new Set(profiles.map(p=>p.angle)).size,12);
+ assert(new Set(profiles.map(p=>p.role)).size>=3);
+ assert.deepEqual(h.run(`SpikeTactics.profile('bot_4')`),profiles[4]);
+ for(const p of profiles){assert(p.tempo<=1&&p.tempo>=.88);assert(p.step+p.settle<p.cycle);}
+});
