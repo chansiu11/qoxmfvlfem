@@ -168,6 +168,20 @@
    brain._teamStepId=event.id;planner.hear(teamNumber(bot),event);break;
   }
  }
+ function attackAdvanceFire(bot,brain,enemy,now,dt){
+  // Keep pressure during the movement window without changing reaction, accuracy or weapon stats.
+  if(!enemy||bot.isReloading||bot.clipAmmo<=0||bot._spikeUse)return;
+  if(!reserveAim(bot,enemy)){
+   if(trafficClock>(bot._laneSwapAt||0)){bot._requestLaneSwap=true;bot._laneSwapAt=trafficClock+8;}
+   return;
+  }
+  const diff=AI_DIFFICULTY[aiDifficulty]||AI_DIFFICULTY.easy,p=traits(bot);
+  if(brain.targetId!==enemy.id){brain.targetId=enemy.id;brain.reactionUntil=now+Math.max(180,Math.min(650,diff.delay*.5*p.reaction))+Math.random()*140;brain.burstLeft=0;brain.burstPauseUntil=0;}
+  brain.lastSeenAt=now;brain.lastKnown={x:enemy.x,y:enemy.y};brain.enemyVx=0;brain.enemyVy=0;
+  const w=WEAPONS[bot.weapon];if(!w)return;
+  if(brain.burstLeft<=0&&now>=brain.burstPauseUntil)brain.burstLeft=w.category==='Rifle'||w.category==='SMG'?2+Math.floor(Math.random()*2):1;
+  updateHumanBotAim(bot,brain,enemy,{...diff,spread:Math.min(.22,diff.spread)},now,dt);
+ }
  function combat(bot,brain,enemy,now,dt,standGround=false){
   if(!reserveAim(bot,enemy)){overflowWatch(bot,brain,enemy,dt);return;}bot._angleOverflow=null;
   const diff=AI_DIFFICULTY[aiDifficulty]||AI_DIFFICULTY.easy,p=traits(bot);
@@ -246,7 +260,7 @@
    if(enemy&&engage){const ammo=bot.clipAmmo;combat(bot,brain,enemy,now,dt,entering||!attack);
     if(entering){if(bot.clipAmmo<ammo&&bot._entryFight.wait===null)bot._entryFight.wait=Math.random();
      // A denied angle cannot stall the objective entry indefinitely.
-     if(bot._angleOverflow){bot._entryFight.wait=null;bot._entryFight.advance=1.5;}else continue;
+     if(bot._angleOverflow){bot._entryFight.wait=null;bot._entryFight.advance=1.5;if(trafficClock>(bot._laneSwapAt||0)){bot._requestLaneSwap=true;bot._laneSwapAt=trafficClock+8;}}else continue;
     }else continue;
    }
    if(bot.clipAmmo<=0&&bot.reserveAmmo>0&&!bot.isReloading)reloadWeapon(bot);
@@ -282,7 +296,8 @@
      brain.state=plan.style==='rotate'?'site_rotation':split?'split_entry':plan.style==='default'?'default_control':'group_entry';
      const point=points.filter(Boolean)[bot._tacticRoute?.index||0]||chosen;
      const spread=safePosition(bot,point,index*2.4),nearMate=friends.find(p=>p.id!==bot.id&&distance(bot,p)<38);
-     goal=route(bot,brain,points,'attack:'+siteIndex+':'+split,false);watch(bot,brain,enemy||recent||goal||spread,dt);
+     goal=route(bot,brain,points,'attack:'+siteIndex+':'+split,false);
+     if(enemy)attackAdvanceFire(bot,brain,enemy,now,dt);else watch(bot,brain,recent||goal||spread,dt);
     }
    }else{
     const assigned=index%3===2?call('MARKET'):SpikeRules.SITES[index%2];

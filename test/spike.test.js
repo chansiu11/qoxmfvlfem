@@ -429,3 +429,8 @@ test('first visible target stays locked until occluded, out of view, dead or dis
  h.run('remotePlayers.first.x=500;remotePlayers.second.hp=100;chooseBotEnemy=()=>remotePlayers.second');assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain).id'),'second');
  h.run('delete remotePlayers.second;chooseBotEnemy=()=>null');assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain)'),null);
 });
+test('five attackers keep returning fire while advancing against two defenders',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='observer';myPlayer.hp=0;myPlayer.isDead=true;spectatorIds.add(myPlayer.id);for(let i=0;i<7;i++)aiBots.push({...myPlayer,id:'bot_'+i,teamId:i<5?'team_1':'team_2',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeFrameDt=.05;globalThis.clock=100000;Date.now=()=>clock;Math.random=()=>.5;obstacles=[];hasLineOfSight=()=>true;checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;for(let i=0;i<7;i++){Object.assign(aiBots[i],{x:i<5?1600:2250,y:1200+(i<5?i: i-5)*90,angle:i<5?0:Math.PI,weapon:'v_vandal',clipAmmo:1000,reserveAmmo:0});ensureBotBrain(aiBots[i]).aimAngle=aiBots[i].angle;}globalThis.advanceShots=0;globalThis.attackShots=0;const realShoot=shoot;shoot=(p,...args)=>{const ammo=p.clipAmmo;realShoot(p,...args);if(p.clipAmmo<ammo&&p.teamId==='team_1'){attackShots++;if(p._entryFight?.advance>0)advanceShots++;}};for(let i=0;i<160;i++){clock+=50;SpikeTactics.tick();}`);
+ console.log('5v2 firing diagnostic',h.run('JSON.stringify({attackShots,advanceShots})'));
+ assert(h.run('advanceShots>0'),'attackers must not cease firing for their entire advance window');
+});
