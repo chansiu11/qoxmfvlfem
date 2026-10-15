@@ -165,16 +165,10 @@ test('quiet walking suppresses footsteps and general hearing uses metre scale',(
  h.run(`isHost=true;myPlayer.hp=200;myPlayer.isDead=false;myPlayer.movementMode='stealth';footstepTracks.clear();footstepCheckAt=0;updateFootsteps();myPlayer.x+=30;footstepCheckAt=0;updateFootsteps();`);
  assert.equal(h.run('footstepEvents.length'),0);
 });
-test('store enforces funds and spawn/phase, refunds only current purchases, preserves survivors',()=>{
- const p=actors(),m=new Match(()=>p),a=p[0];assert.equal(a.credits,800);assert.equal(a.hp,100);assert.equal(a.weapon,'v_classic');
- assert.equal(m.buy(a,'v_vandal'),false);assert(m.buy(a,'v_ghost'));assert.equal(a.credits,300);assert(!m.buy(a,'v_ghost'));
- assert(m.sell(a,'secondary'));assert.equal(a.credits,800);assert.equal(a.weapon,'v_classic');assert(!m.sell(a,'secondary'));
- assert(m.buy(a,'light'));assert.equal(a.credits,400);assert.equal(a.shield,25);assert(!m.buy(a,'fake'));
- const x=a.x;a.x=10;assert(!m.buy(a,'v_shorty'));a.x=x;
- tick(m,30.1);assert(!m.buy(a,'v_classic'));m.rewardKill(a.id);assert.equal(a.credits,600);m.finish(1,'win');assert.equal(a.credits,3600);assert.equal(p[1].credits,2700);
- m.finish(1,'duplicate');assert.equal(a.credits,3600);tick(m,6.1);assert.equal(a.shield,25);assert(!m.sell(a,'armor'));
- assert(m.buy(a,'v_vandal'));assert.equal(a.credits,700);assert(m.switch(a,'secondary'));assert.equal(a.weapon,'v_classic');assert(m.switch(a,'primary'));assert.equal(a.weapon,'v_vandal');
- a.isDead=true;a.hp=0;m.begin();assert.equal(a.weapon,'v_classic');assert.equal(a.shield,0);assert.equal(a.credits,700);
+test('three-gun store enforces funds, refunds, survivor gear and free respawn rifle',()=>{
+ const p=actors(),m=new Match(()=>p),a=p[0];assert.equal(a.credits,800);assert.equal(a.weapon,'v_vandal');assert(!m.buy(a,'v_bucky'));a.credits=1000;
+ assert(m.buy(a,'v_bucky'));assert.equal(a.credits,150);assert(m.sell(a,'primary'));assert.equal(a.credits,1000);assert.equal(a.weapon,'v_vandal');assert(!m.sell(a,'primary'));
+ assert(m.buy(a,'v_operator'));assert.equal(a.credits,50);tick(m,30.1);assert(!m.buy(a,'v_vandal'));m.finish(1,'win');tick(m,6.1);assert.equal(a.weapon,'v_operator');assert(!m.sell(a,'primary'));a.hp=0;a.isDead=true;m.begin();assert.equal(a.weapon,'v_vandal');assert.equal(a.loadout.secondary,null);assert(!m.buy(a,'v_classic'));
 });
 test('shield damage separates HP, exhausts armor and regenerates only from reserve after delay',()=>{
  const p=actors(),m=new Match(()=>p),a=p[0];a.credits=9000;m.buy(a,'heavy');
@@ -182,29 +176,31 @@ test('shield damage separates HP, exhausts armor and regenerates only from reser
  m.buy(a,'regen');assert.equal(SpikeRules.shieldDamage(a,30),5);assert.equal(a.shield,0);tick(m,2.9);assert.equal(a.shield,0);tick(m,1.2);assert.equal(a.shield,25);assert.equal(a.shieldPool,25);
  SpikeRules.shieldDamage(a,25);tick(m,4.2);assert.equal(a.shield,25);assert.equal(a.shieldPool,0);SpikeRules.shieldDamage(a,25);tick(m,5);assert.equal(a.shield,0);
 });
-test('catalog has working bullets, distance falloff, shotguns and distinct reloads',()=>{
- const guns=Object.values(SpikeCatalog.weapons);assert(guns.length>=19);for(const w of guns){assert(w.maxClip>0&&w.pellets>=1&&w.reloadMs>0&&w.cooldown>0);assert(w.icon.startsWith('https://'));}
- assert.equal(SpikeCatalog.weapons.v_vandal.cost,2900);assert.equal(SpikeCatalog.weapons.v_operator.damage,120);assert.equal(SpikeCatalog.weapons.v_classic.cost,0);
- assert.equal(SpikeRules.bulletDamage({weapon:'v_phantom',startX:0,startY:0},{x:400,y:0}),31.2);
- assert.equal(SpikeRules.bulletDamage({weapon:'v_phantom',startX:0,startY:0},{x:1200,y:0}),28);
+test('three general guns match deathmatch ballistics and reloads; shotgun only renamed',()=>{
+ const h=harness();assert.equal(Object.keys(SpikeCatalog.weapons).length,3);
+ for(const w of Object.values(SpikeCatalog.weapons)){
+  for(const k of ['cooldown','bulletSpeed','damage','pellets','spread','maxClip'])assert.equal(w[k],h.run(`WEAPONS['${w.deathmatchWeapon}']['${k}']`));
+  assert.equal(w.reloadMs,1500);assert.equal(SpikeRules.bulletDamage({weapon:w.id,startX:0,startY:0},{x:2000,y:0}),w.damage);
+ }
+ assert.equal(SpikeCatalog.weapons.v_bucky.name,'버키');
 });
 test('host validates guest purchase sequences, protects money and armor, synchronizes loadout',()=>{
- const h=harness();h.run(`isHost=true;myPlayer.id='host';remotePlayers.guest={...myPlayer,id:'guest'};document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='false';hostStartGame();globalThis.buy={type:'SPIKE_BUY',player:{id:'guest'},item:'v_ghost',round:1,seq:1};handleNetworkData(buy);`);
- assert.equal(h.run('remotePlayers.guest.credits'),300);assert.equal(h.run('remotePlayers.guest.weapon'),'v_ghost');h.run('handleNetworkData(buy)');assert.equal(h.run('remotePlayers.guest.credits'),300);
+ const h=harness();h.run(`isHost=true;myPlayer.id='host';remotePlayers.guest={...myPlayer,id:'guest'};document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='false';hostStartGame();remotePlayers.guest.credits=1150;globalThis.buy={type:'SPIKE_BUY',player:{id:'guest'},item:'v_bucky',round:1,seq:1};handleNetworkData(buy);`);
+ assert.equal(h.run('remotePlayers.guest.credits'),300);assert.equal(h.run('remotePlayers.guest.weapon'),'v_bucky');h.run('handleNetworkData(buy)');assert.equal(h.run('remotePlayers.guest.credits'),300);
  h.run(`handleNetworkData({type:'SYNC',player:{id:'guest',_spikeRound:1,credits:9000,shield:500,shieldType:'heavy',weapon:'v_operator',hp:999}})`);
- assert.equal(h.run('remotePlayers.guest.credits'),300);assert.equal(h.run('remotePlayers.guest.shield'),0);assert.equal(h.run('remotePlayers.guest.hp'),100);assert.equal(h.run('remotePlayers.guest.weapon'),'v_ghost');
- h.run(`handleNetworkData({...buy,seq:2,round:0,item:'v_classic'})`);assert.equal(h.run('remotePlayers.guest.weapon'),'v_ghost');
- const packet=h.run('JSON.stringify(spikeMatch.snapshot(remotePlayers.guest))'),g=harness();g.run(`selectedMode='spike';isHost=false;myPlayer.id='guest';spikeApply(${packet})`);assert.equal(g.run('myPlayer.credits'),300);assert.equal(g.run('myPlayer.weapon'),'v_ghost');
+ assert.equal(h.run('remotePlayers.guest.credits'),300);assert.equal(h.run('remotePlayers.guest.shield'),0);assert.equal(h.run('remotePlayers.guest.hp'),100);assert.equal(h.run('remotePlayers.guest.weapon'),'v_bucky');
+ h.run(`handleNetworkData({...buy,seq:2,round:0,item:'v_classic'})`);assert.equal(h.run('remotePlayers.guest.weapon'),'v_bucky');
+ const packet=h.run('JSON.stringify(spikeMatch.snapshot(remotePlayers.guest))'),g=harness();g.run(`selectedMode='spike';isHost=false;myPlayer.id='guest';spikeApply(${packet})`);assert.equal(g.run('myPlayer.credits'),300);assert.equal(g.run('myPlayer.weapon'),'v_bucky');
 });
 test('store opens in prep, shows weapon categories and armor, closes on live phase',()=>{
  const h=harness();h.run(`isHost=true;document.getElementById('gameModeSelect').value='spike';document.getElementById('aiToggle').value='true';document.getElementById('aiCountInput').value='1';hostStartGame()`);
- assert(h.run('spikeShopOpen'));assert(h.run("document.getElementById('shopGuns').innerHTML.includes('밴달')"));assert(h.run("document.getElementById('shopArmor').innerHTML.includes('재생 보호막')"));
+ assert.equal(h.run('spikeShopOpen'),false);h.run('spikeToggleShop(true)');assert(h.run('spikeShopOpen'));assert(h.run("document.getElementById('shopGuns').innerHTML.includes('돌격소총')"));assert(h.run("document.getElementById('shopArmor').innerHTML.includes('재생 보호막')"));
  h.run(`spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeUI()`);assert.equal(h.run('spikeShopOpen'),false);
  h.run(`selectedMode='normal';spikeToggleShop(true)`);assert.equal(h.run('spikeShopOpen'),false);
 });
-test('packed Vandal shot consumes purchased heavy shield and damages HP on host',()=>{
+test('packed rifle shot consumes purchased heavy shield and damages HP on host',()=>{
  const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;isSpawnSelecting=false;isSpectating=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};hasLineOfSight=()=>true;myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.x=100;myPlayer.y=100;myPlayer.angle=0;myPlayer.weapon='v_vandal';myPlayer.clipAmmo=25;myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isShooting=false;myPlayer.isReloading=false;spikeState={phase:'live'};remotePlayers.enemy={id:'enemy',x:175,y:100,hp:100,maxHp:100,isDead:false,teamId:'team_2',shieldType:'heavy',shield:50,weapon:'v_classic'};shoot(myPlayer,0);originalUpdate();`);
- assert.equal(h.run('myPlayer.clipAmmo'),24);assert(Math.abs(h.run('remotePlayers.enemy.shield')-28.88)<1e-6);assert(Math.abs(h.run('remotePlayers.enemy.hp')-89.12)<1e-6);
+ assert.equal(h.run('myPlayer.clipAmmo'),24);assert(Math.abs(h.run('remotePlayers.enemy.shield')-36.8)<1e-6);assert(Math.abs(h.run('remotePlayers.enemy.hp')-93.2)<1e-6);
 });
 test('all catalog guns set frame-independent movement and quiet speeds without affecting deathmatch',()=>{
  const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=false;isMobile=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};myPlayer.isDead=false;myPlayer.hp=100;keys['d']=true;`);
@@ -214,27 +210,17 @@ test('all catalog guns set frame-independent movement and quiet speeds without a
  }
  h.run(`selectedMode='normal';keys['shift']=false;myPlayer.weapon='shotgun';myPlayer.x=1200;originalUpdate()`);assert.equal(h.run('myPlayer.x'),1203);
  h.run(`selectedMode='spike';myPlayer.weapon='v_vandal';checkObstacleCollision=()=>true;originalUpdate()`);assert.equal(h.run('myPlayer.isMoving'),false);assert.equal(h.run('myPlayer.moveSpeed'),0);
- assert.equal(SpikeCatalog.weapons.v_bucky.damage,17);assert.equal(SpikeCatalog.weapons.v_judge.damage,17);assert.equal(SpikeCatalog.weapons.v_shorty.damage,11);
+ assert.equal(SpikeCatalog.weapons.v_bucky.damage,14.4);
 });
-test('run-and-gun spread matches 2D collision scale, walking is intermediate, actual shots use it only in general',()=>{
- const w=SpikeCatalog.weapons.v_vandal;
- const stationary=SpikeRules.movingSpread({weapon:w.id,isMoving:false});
- const walking=SpikeRules.movingSpread({weapon:w.id,isMoving:true,movementMode:'stealth'});
- const moving=SpikeRules.movingSpread({weapon:w.id,isMoving:true,movementMode:'walk'});
- assert.equal(stationary,w.spread);assert(stationary<walking&&walking<moving);
- const chance=(spread,range)=>Math.min(1,2*Math.atan2(25,range)/spread);
- assert(chance(moving,400)>.35&&chance(moving,400)<.45,'10 m running rifle gives roughly 40% centered hits against radius 25');
- assert(chance(moving,800)<.25);assert(chance(walking,400)>.95);
- assert(SpikeRules.movingSpread({weapon:'v_spectre',isMoving:true})<moving);
- const h=harness();h.run(`isHost=true;myPlayer.id='me';myPlayer.weapon='v_vandal';myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isReloading=false;myPlayer.isMoving=true;myPlayer.movementMode='walk';myPlayer.angle=0;spikeState={phase:'live'};Math.random=()=>1;`);
- const angle=mode=>h.run(`selectedMode='${mode}';myPlayer.clipAmmo=10;bullets=[];shoot(myPlayer,0);Math.atan2(bullets[0].dy,bullets[0].dx)`);
- assert(Math.abs(angle('spike')-moving/2)<1e-9);assert(Math.abs(angle('normal')-w.spread/2)<1e-9);
+test('general shots retain deathmatch spread while moving',()=>{
+ for(const w of Object.values(SpikeCatalog.weapons))for(const mode of ['stealth','walk'])assert.equal(SpikeRules.movingSpread({weapon:w.id,isMoving:true,movementMode:mode}),w.spread);
+ const h=harness();h.run(`isHost=true;myPlayer.id='me';myPlayer.weapon='v_bucky';myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isReloading=false;myPlayer.isMoving=true;myPlayer.movementMode='walk';myPlayer.angle=0;spikeState={phase:'live'};Math.random=()=>1;selectedMode='spike';myPlayer.clipAmmo=8;shoot(myPlayer,0);`);
+ assert.equal(h.run('bullets.length'),8);assert.equal(h.run('myPlayer.clipAmmo'),7);assert(Math.abs(h.run('Math.atan2(bullets[0].dy,bullets[0].dx)')-.09)<1e-9);
 });
 
 test('general scoped guns look farther ahead while other modes and short-range guns keep their camera',()=>{
  const h=harness();
  assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_operator'})})()"),1200);
- assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_marshal'})})()"),950);
  assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_vandal'})})()"),620);
  assert.equal(h.run("(()=>{selectedMode='spike';return aimLookDistance({weapon:'v_bucky'})})()"),200);
  assert.equal(h.run("(()=>{selectedMode='normal';return aimLookDistance({weapon:'v_operator'})})()"),200);
@@ -320,11 +306,11 @@ test('mobile joystick chooses two fixed speeds and quiet approaches stop when ti
 });
 
 test('semi-auto fire unlocks on release and weapon switching instead of remaining stuck after first shot',()=>{
- const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;spikeState={phase:'live'};myPlayer.hp=100;myPlayer.isDead=false;myPlayer.weapon='v_classic';myPlayer.clipAmmo=12;myPlayer.isShooting=true;myPlayer.isReloading=false;myPlayer._spikeUse=false;shoot(myPlayer);`);
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;spikeState={phase:'live'};myPlayer.hp=100;myPlayer.isDead=false;myPlayer.weapon='v_bucky';myPlayer.clipAmmo=12;myPlayer.isShooting=true;myPlayer.isReloading=false;myPlayer._spikeUse=false;shoot(myPlayer);`);
  assert.equal(h.run('myPlayer.clipAmmo'),11);h.run('shoot(myPlayer)');assert.equal(h.run('myPlayer.clipAmmo'),11);
  h.run(`myPlayer.isShooting=false;gameStarted=false;update();myPlayer.isShooting=true;shoot(myPlayer)`);
  assert.equal(h.run('myPlayer.clipAmmo'),10);
- h.run(`myPlayer.loadout={secondary:{id:'v_ghost',clip:15,reserve:60}};myPlayer.activeSlot=null;SpikeRules.equip(myPlayer,'secondary');shoot(myPlayer)`);
+ h.run(`myPlayer.loadout={secondary:{id:'v_operator',clip:15,reserve:60}};myPlayer.activeSlot=null;SpikeRules.equip(myPlayer,'secondary');shoot(myPlayer)`);
  assert.equal(h.run('myPlayer.clipAmmo'),14);
 });
 

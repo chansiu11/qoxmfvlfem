@@ -15,7 +15,9 @@ const mode=()=>active||modal.style.display==='flex'?modeSelect.value:currentMode
 const key=(p,m)=>'battlefield-layout-v3-'+p+'-'+m;
 let active=false,selected='',drag=null,preview=new Map(),pointerPreview=new Map(),controlsDisplay=null,lastLiveMode=currentMode();
 function parse(raw){try{const value=JSON.parse(raw||'{}');return value&&typeof value==='object'?value:{}}catch{return {}}}
-function read(p,m){const saved=localStorage.getItem(key(p,m));return parse(saved===null?localStorage.getItem('battlefield-layout-v2-'+p):saved)}
+function read(p,m){
+ const migration=key(p,m)+'-compact-32';if(!localStorage.getItem(migration)){const data=parse(localStorage.getItem(key(p,m)));for(const id of ['spikePanel','spikeBanner','spikeAction','btnSpike','statusHUD','spectateHUD','respawnHUD','killNotification'])delete data[id];try{localStorage.setItem(key(p,m),JSON.stringify(data));localStorage.setItem(migration,'1')}catch{}}
+const saved=localStorage.getItem(key(p,m));return parse(saved===null?localStorage.getItem('battlefield-layout-v2-'+p):saved)}
 function save(p,m,data){try{localStorage.setItem(key(p,m),JSON.stringify(data))}catch{}}
 function clean(v){return Number.isFinite(+v)?Math.max(.5,Math.min(1.8,+v)):1}
 function find(id){return document.getElementById(id)}

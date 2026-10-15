@@ -148,18 +148,18 @@ update=()=>{
  myPlayer._spikeUse=spikeHeld;
  if(spikeState?.phase==='prep'||['end','finished'].includes(spikeState?.phase)||spikeHeld)myPlayer.isShooting=false;
  originalUpdate();
- if(isHost&&spikeMatch?.phase==='prep')for(const bot of aiBots)if(bot._boughtRound!==spikeMatch.round){bot._boughtRound=spikeMatch.round;for(const id of ['v_vandal','v_spectre','v_ghost'])if(spikeMatch.buy(bot,id))break;spikeMatch.buy(bot,bot.credits>=1000?'heavy':'light');}
+ if(isHost&&spikeMatch?.phase==='prep')for(const bot of aiBots)if(bot._boughtRound!==spikeMatch.round){bot._boughtRound=spikeMatch.round;for(const id of [...(Number(bot.id.replace(/\D/g,''))%3===1?['v_bucky']:Number(bot.id.replace(/\D/g,''))%3===2?['v_operator']:[]),'v_vandal'])if(spikeMatch.buy(bot,id))break;spikeMatch.buy(bot,bot.credits>=1000?'heavy':'light');}
  if(spikeState?.phase==='prep')SpikeRules.constrainPrep(myPlayer,spikePrepSide(myPlayer));
  if(isHost&&spikeMatch){for(const p of Object.values(remotePlayers))if(Date.now()-(p._inputAt||0)>700)p._spikeUse=false;const prev=spikeMatch.round;spikeMatch.tick(dt);spikeState=spikeMatch.snapshot();if(['end','finished'].includes(spikeState.phase))bullets.length=0;if(prev!==spikeMatch.round)spikeApply(spikeState);}
  spikeUI();
  if(isHost&&spikeState?.phase==='finished'&&spikeState.time<=0)returnToRoomAfterGame();
 };
 const spikePanel=document.createElement('div');spikePanel.id='spikePanel';
-spikePanel.style.cssText='position:absolute;top:65px;left:50%;transform:translateX(-50%);z-index:48;text-align:center;background:#101821dd;border:1px solid #5aaeb6;border-radius:8px;padding:8px 12px;color:white;max-width:75%;display:none;font-size:13px;pointer-events:none';
-spikePanel.innerHTML='<div id="spikeStatus"></div><div id="spikeWeaponBar" style="pointer-events:auto;margin-top:6px"><button style="width:auto;padding:7px 18px;margin:2px" onclick="spikeToggleShop()">B · 장비 구매</button></div><div id="spikeEconomy" style="color:#e8bd69;margin:5px"></div><div style="pointer-events:auto"><button style="width:auto;padding:5px 10px" onclick="spikeShopAction(\'switch\',\'primary\')">1 · 주무기</button> <button style="width:auto;padding:5px 10px" onclick="spikeShopAction(\'switch\',\'secondary\')">2 · 보조무기</button></div><div id="spikePrompt" style="color:#ffda83;margin-top:4px"></div>';
+spikePanel.style.cssText='position:absolute;top:8px;left:8px;transform:none;z-index:48;text-align:center;background:#101821dd;border:1px solid #5aaeb6;border-radius:8px;padding:5px 7px;color:white;max-width:29%;display:none;font-size:10px;pointer-events:none';
+spikePanel.innerHTML='<div id="spikeStatus"></div><div id="spikeWeaponBar" style="pointer-events:auto;margin-top:6px"><button style="width:auto;padding:4px 8px;margin:2px;font-size:11px" onclick="spikeToggleShop()">B · 장비 구매</button></div><div id="spikeEconomy" style="color:#e8bd69;margin:5px"></div><div id="spikePrompt" style="color:#ffda83;margin-top:4px"></div>';
 
 gameFrame.appendChild(spikePanel);
-const spikeButton=document.createElement('div');spikeButton.id='btnSpike';spikeButton.className='mobile-btn touch-zone';spikeButton.textContent='설치 / 해체';spikeButton.style.cssText='bottom:270px;right:40px;width:85px;border-color:#ffcc66;display:none;touch-action:none';document.getElementById('mobileControls').appendChild(spikeButton);
+const spikeButton=document.createElement('div');spikeButton.id='btnSpike';spikeButton.className='mobile-btn touch-zone';spikeButton.textContent='설치 / 해체';spikeButton.style.cssText='bottom:180px;right:12px;width:64px;height:48px;font-size:11px;border-color:#ffcc66;display:none;touch-action:none';document.getElementById('mobileControls').appendChild(spikeButton);
 let spikeTouch=null;
 spikeButton.addEventListener('touchstart',e=>{if(isEditingKeys||spikeTouch!==null)return;e.preventDefault();spikeTouch=e.changedTouches[0].identifier;spikeHeld=true;},{passive:false});
 for(const name of ['touchend','touchcancel'])window.addEventListener(name,e=>{if([...e.changedTouches].some(t=>t.identifier===spikeTouch)){spikeTouch=null;spikeHeld=false;}});
@@ -167,7 +167,7 @@ window.addEventListener('keydown',e=>{if(selectedMode==='spike'&&e.key.toLowerCa
 window.addEventListener('keyup',e=>{if(e.key.toLowerCase()==='f')spikeHeld=false;});
 window.addEventListener('blur',()=>{spikeHeld=false;spikeTouch=null;});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){spikeHeld=false;spikeTouch=null;}});
-const spikeBanner=document.createElement('div');spikeBanner.id='spikeBanner';spikeBanner.style.cssText='position:absolute;left:50%;top:29%;transform:translateX(-50%);z-index:70;width:min(600px,88%);text-align:center;padding:20px 12px;border-top:3px solid #66e4d0;background:linear-gradient(90deg,transparent,#101923f2 15%,#101923f2 85%,transparent);color:white;pointer-events:none;display:none';spikeBanner.setAttribute('aria-live','polite');gameFrame.appendChild(spikeBanner);
+const spikeBanner=document.createElement('div');spikeBanner.id='spikeBanner';spikeBanner.style.cssText='position:absolute;left:50%;top:6px;transform:translateX(-50%);z-index:70;width:min(350px,36%);text-align:center;padding:5px 8px;border-top:3px solid #66e4d0;background:linear-gradient(90deg,transparent,#101923f2 15%,#101923f2 85%,transparent);color:white;pointer-events:none;display:none';spikeBanner.setAttribute('aria-live','polite');gameFrame.appendChild(spikeBanner);
 let spikeBannerKey='',spikeBannerUntil=0;
 function spikeRoundBanner(){
  const s=spikeState;if(selectedMode!=='spike'||!gameStarted||!s){spikeBanner.style.display='none';spikeBannerKey='';return;}
@@ -179,10 +179,10 @@ function spikeRoundBanner(){
  if(s.phase==='live'){title='라운드 시작';sub=myPlayer.teamId===`team_${s.attackTeam}`?'공격 · A/B에 스파이크를 설치하세요':'수비 · 설치를 막고 스파이크를 해체하세요';}
  if(s.phase==='planted'){title='스파이크 설치됨';sub=`${s.bomb.site} 지점 · 폭발까지 ${Math.ceil(s.time)}초`;color='#ffc56a';}
  if(['end','finished'].includes(s.phase)){title=(s.phase==='finished'?'게임 종료 · ':'라운드 ')+(observer?`팀 ${s.winnerTeam} 승리`:win?'승리':'패배');color=observer||win?'#66e4d0':'#ff7684';sub=`${s.result} · ${s.score[0]} : ${s.score[1]} · ${Math.ceil(Math.max(0,s.time))}초 후 ${s.phase==='finished'?'대기실 복귀':'다음 라운드'}`;}
- spikeBanner.style.display=title?'block':'none';spikeBanner.style.borderColor=color;spikeBanner.innerHTML=`<div style="font-size:clamp(23px,4vw,40px);font-weight:900;color:${color}">${title}</div><div style="margin-top:9px;font-size:14px">${sub}</div>`;
+ spikeBanner.style.display=title?'block':'none';spikeBanner.style.borderColor=color;spikeBanner.innerHTML=`<div style="font-size:clamp(13px,1.8vw,20px);font-weight:900;color:${color}">${title}</div><div style="margin-top:3px;font-size:10px">${sub}</div>`;
 }
-const spikeAction=document.createElement('div');spikeAction.id='spikeAction';spikeAction.style.cssText='position:absolute;left:50%;bottom:28%;transform:translateX(-50%);z-index:66;width:min(350px,68vw);color:#fff;text-align:center;pointer-events:none;display:none;text-shadow:0 2px 5px #000';
-spikeAction.innerHTML='<div id="spikeActionTitle" style="font-size:16px;letter-spacing:3px;font-weight:800;margin-bottom:10px"></div><div id="spikeActionTrack" role="progressbar" aria-label="스파이크 진행" aria-valuemin="0" aria-valuemax="100" style="height:12px;padding:3px;border:1px solid #ffffffaa;background:#101820b8;position:relative"><div id="spikeActionFill" style="height:100%;width:0;background:#f2f3e5;transition:width 65ms linear"></div><div id="spikeActionHalf" style="display:none;position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:#fff"></div></div><div style="display:flex;justify-content:space-between;font-size:12px;margin-top:9px"><span id="spikeActionKey"></span><span id="spikeActionTime"></span></div><div id="spikeActionSaved" style="color:#72edce;font-size:12px;margin-top:6px"></div>';
+const spikeAction=document.createElement('div');spikeAction.id='spikeAction';spikeAction.style.cssText='position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:66;width:min(250px,36vw);color:#fff;text-align:center;pointer-events:none;display:none;text-shadow:0 2px 5px #000';
+spikeAction.innerHTML='<div id="spikeActionTitle" style="font-size:12px;letter-spacing:1px;font-weight:800;margin-bottom:10px"></div><div id="spikeActionTrack" role="progressbar" aria-label="스파이크 진행" aria-valuemin="0" aria-valuemax="100" style="height:12px;padding:3px;border:1px solid #ffffffaa;background:#101820b8;position:relative"><div id="spikeActionFill" style="height:100%;width:0;background:#f2f3e5;transition:width 65ms linear"></div><div id="spikeActionHalf" style="display:none;position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:#fff"></div></div><div style="display:flex;justify-content:space-between;font-size:12px;margin-top:9px"><span id="spikeActionKey"></span><span id="spikeActionTime"></span></div><div id="spikeActionSaved" style="color:#72edce;font-size:12px;margin-top:6px"></div>';
 gameFrame.appendChild(spikeAction);
 function updateSpikeAction(){
  const s=spikeState;if(selectedMode!=='spike'||!gameStarted||gameEnded||!s||!['live','planted'].includes(s.phase)){spikeAction.style.display='none';return;}
@@ -206,9 +206,10 @@ function spikeUI(){
  document.getElementById('btnSprint').style.display=selectedMode==='spike'?'none':'';
  if(selectedMode==='spike')mobileSprintHeld=false;
  const active=selectedMode==='spike'&&gameStarted&&!gameEnded&&spikeState;spikePanel.style.display=active?'block':'none';spikeButton.style.display=active&&isMobile?'flex':'none';if(!active)return;
+ document.getElementById('statusHUD').style.display='none';
  const s=spikeState,b=s.bomb,attacking=myPlayer.teamId===`team_${s.attackTeam}`;
  document.getElementById('spikeStatus').textContent=`어센트 · ${s.round}라운드 | 청록 ${s.score[0]} : ${s.score[1]} 코랄 | ${attacking?'공격':'수비'} | ${s.phase==='prep'?'준비':s.phase==='planted'?'폭발까지':['end','finished'].includes(s.phase)?s.result:'라운드'} ${Math.max(0,Math.ceil(s.time))}초`;
- document.getElementById('spikeEconomy').textContent=`¤ ${myPlayer.credits||0} · HP ${Math.ceil(myPlayer.hp)} · 방어구 ${Math.ceil(myPlayer.shield||0)}${myPlayer.shieldType==='regen'?' / 재생 '+Math.ceil(myPlayer.shieldPool||0):''}`;
+ document.getElementById('spikeEconomy').textContent=`${WEAPONS[myPlayer.weapon]?.name||''} ${myPlayer.clipAmmo||0}/${myPlayer.reserveAmmo||0} · ¤ ${myPlayer.credits||0} · HP ${Math.ceil(myPlayer.hp)} · 방어구 ${Math.ceil(myPlayer.shield||0)}${myPlayer.shieldType==='regen'?' / 재생 '+Math.ceil(myPlayer.shieldPool||0):''}`;
  const prep=s.phase==='prep'&&!myPlayer.isDead;document.getElementById('spikeWeaponBar').style.display=prep?'block':'none';
  let hint=prep?'B / 구매 버튼 · 준비 구역에서 장비 구매 · 1 주무기 / 2 보조무기':['end','finished'].includes(s.phase)?s.result:b.planted?`${b.site} 지점 설치됨 · 수비는 F / 설치·해체 버튼 7초 유지`:b.carrier===myPlayer.id?'스파이크 보유 · A/B에서 F / 설치·해체 버튼 4초 유지':attacking?'스파이크 운반자를 엄호하세요. 떨어진 스파이크는 가까이 가면 줍습니다.':'A/B 지점을 방어하세요.';
  if(b.planted&&b.defuseCheckpoint>=3.5)hint+=' · 반해체 완료 (50% 저장)';

@@ -134,7 +134,7 @@
    if(i===3)setTimeout(()=>{if(generation===testGeneration)testButton.textContent='방향 테스트';},700);
   },i*850));
  });};panel.appendChild(testButton);document.body.appendChild(panel);
- const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);const kind=weapon||p?.weapon||'ar';emit(kind,{x,y},1,'shot:'+id);};
+ const shot=addGunshotEvent;addGunshotEvent=(x,y,id,weapon)=>{shot(x,y,id);const p=getCombatEntityById(id);const raw=weapon||p?.weapon||'ar',kind=globalThis.SpikeCatalog?.weapons[raw]?.deathmatchWeapon||raw;emit(kind,{x,y},1,'shot:'+id);};
  playNearbyStep=(distance,range,event)=>{const listener=isSpectating&&spectateTarget?spectateTarget:myPlayer;if(typeof spikeCanHearStep==='function'&&!spikeCanHearStep(listener,event))return;if(range<=0||distance>=range)return;emit('step',event?{x:event.x,y:event.y,range}:null,event?.entityId===myPlayer.id ? .35 : 1,event?'step:'+event.entityId:'nearby-step');};
  let previous=null,lastTick=0,lastBeep=0,lastStep=0;const remoteAudio=new Map();
  function poll(){
