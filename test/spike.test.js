@@ -399,3 +399,17 @@ test('all shield types take full damage first and only overflow reaches HP',()=>
  for(const type of ['light','heavy','regen']){const a={shieldType:type,shield:25,hp:100};assert.equal(SpikeRules.shieldDamage(a,18),0);assert.equal(a.shield,7);assert.equal(SpikeRules.shieldDamage(a,18),11);assert.equal(a.shield,0);assert.equal(SpikeRules.shieldDamage(a,18),18);}
  const h=harness();assert(h.html.includes("ctx.fillStyle='#389cff'"));h.run(`selectedMode='spike';gameStarted=true;myPlayer.hp=100;myPlayer.maxHp=100;myPlayer.shieldType='heavy';myPlayer.shield=50;spikeState={round:1,phase:'live',time:100,attackTeam:1,score:[0,0],bomb:{}};spikeUI()`);assert.equal(h.run("document.getElementById('spikeShieldFill').style.width"),(50/150*100)+'%');
 });
+test('attack entry waits at most one second after firing and advances despite persistent visible enemy',()=>{
+ const h=harness();h.run(`globalThis.entryBot={};globalThis.visibleEnemy={id:'enemy'};`);assert(h.run('SpikeTactics.entryWindow(entryBot,visibleEnemy,.05)'));
+ for(const wait of [0,.25,.99]){h.run(`entryBot._entryFight={wait:${wait},advance:0}`);let ticks=0;while(h.run('SpikeTactics.entryWindow(entryBot,visibleEnemy,.05)')&&ticks<25)ticks++;assert(ticks<=20);assert(h.run('entryBot._entryFight.advance>0'));assert.equal(h.run('SpikeTactics.entryWindow(entryBot,visibleEnemy,.05)'),false);}
+});
+test('defenders share only audible enemy footsteps and rotate to their site, including far anchors',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='attacker';myPlayer.teamId='team_1';aiBots.push({...myPlayer,id:'bot_1',teamId:'team_2',hp:100,isDead:false},{...myPlayer,id:'bot_2',teamId:'team_2',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();chooseBotEnemy=()=>null;spikeFrameDt=.05;SpikeTactics.tick();Object.assign(aiBots[0],SpikeRules.SITES[0]);Object.assign(aiBots[1],SpikeRules.SITES[1]);footstepEvents.push({id:1,entityId:'attacker',...SpikeRules.SITES[0],range:200,time:Date.now()});SpikeTactics.tick();`);
+ assert.equal(h.run("aiBots.every(b=>b._brain.state==='defense_support')"),true);assert.equal(h.run("aiBots[1]._angleHold.key.endsWith(':A')"),true);
+ h.run(`globalThis.radio=new SpikeTactics.Planner(1,1);radio.hear(2,{x:1,y:2,time:1000});`);assert.equal(h.run('radio.heard(1,1100)'),null);assert.equal(h.run('radio.heard(2,6000)'),null);
+ h.run(`footstepEvents.length=0;aiBots.forEach(b=>{b._angleOverflow=null});spikeMatch.round++;spikeState=spikeMatch.snapshot();footstepEvents.push({id:2,entityId:'attacker',x:0,y:0,range:1,time:Date.now()});SpikeTactics.tick()`);assert.equal(h.run("aiBots.some(b=>b._brain.state==='defense_support')"),false);
+});
+test('defender under fire holds ground and attempts fire instead of seeking cover',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='attacker';myPlayer.teamId='team_1';aiBots.push({...myPlayer,id:'bot_guard',teamId:'team_2',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();chooseBotEnemy=()=>myPlayer;spikeFrameDt=.05;SpikeTactics.tick();aiBots[0].hp=10;aiBots[0]._brain.lastHp=100;globalThis.fireAttempts=0;findBotCoverPoint=()=>{throw Error('unnecessary retreat')};updateHumanBotAim=()=>fireAttempts++;SpikeTactics.tick();`);
+ assert.equal(h.run('fireAttempts'),1);assert.equal(h.run('aiBots[0]._brain.state'),'tactical_burst');
+});
