@@ -250,7 +250,7 @@ test('Ascent attacker and defender spawn callouts anchor five clear, separate bu
 });
 
 test('general tactics use expiring team reports for rotations and never read hidden defenders',()=>{
- const h=harness();h.run('globalThis.plan=new SpikeTactics.Planner(1,1);plan.decide(1000,100,SpikeRules.SITES)');
+ const h=harness();h.run('globalThis.plan=new SpikeTactics.Planner(1,1);plan.site=0;plan.decide(1000,100,SpikeRules.SITES)');
  assert.equal(h.run('plan.decide(15000,80,SpikeRules.SITES).site'),0);
  h.run("plan.report(1,{id:'seen1',...SpikeRules.SITES[0]},16000);plan.report(1,{id:'seen2',...SpikeRules.SITES[0]},16000)");
  assert.equal(h.run('plan.decide(16010,70,SpikeRules.SITES).site'),1);
@@ -365,10 +365,10 @@ test('bot fire rechecks the live enemy behind walls and outside its current fiel
  h.run(`myPlayer.x=1400;shoot(bot)`);assert.equal(h.run('bot.clipAmmo'),24);
 });
 
-test('a shared angle is capped at two bots and overflow watches the rear or lurks',()=>{
+test('a shared angle is capped at two bots and overflow trades or lurks',()=>{
  const h=harness();h.run(`selectedMode='spike';spikeState={phase:'live'};spikeMatch={round:1};myPlayer.hp=0;myPlayer.isDead=true;obstacles=[];aiBots.push(...Array.from({length:12},(_,i)=>({...myPlayer,id:'bot_cap_'+i,teamId:'team_1',x:1200,y:1200,hp:100,isDead:false,angle:0,weapon:'v_vandal'})));for(const bot of aiBots)SpikeTactics.watch(bot,ensureBotBrain(bot),{x:1600,y:1200},1/60);`);
  assert.equal(h.run('aiBots.filter(p=>Math.abs(p._aimClaim.angle)<.01).length'),2);
- assert.equal(h.run("aiBots.filter(p=>p._angleOverflow&&['rear_guard','angle_lurk'].includes(p._angleOverflow.role)).length"),10);
+ assert.equal(h.run("aiBots.filter(p=>p._angleOverflow&&['trade_support','angle_lurk'].includes(p._angleOverflow.role)).length"),10);
  h.run(`aiBots[0].isDead=true;globalThis.available=SpikeTactics.reserveAim(aiBots[3],{x:1600,y:1200})`);assert.equal(h.run('available'),true);
 });
 test('visible enemy combat also caps teammates firing from the same angle',()=>{
@@ -433,4 +433,14 @@ test('five attackers keep returning fire while advancing against two defenders',
  const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='observer';myPlayer.hp=0;myPlayer.isDead=true;spectatorIds.add(myPlayer.id);for(let i=0;i<7;i++)aiBots.push({...myPlayer,id:'bot_'+i,teamId:i<5?'team_1':'team_2',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeFrameDt=.05;globalThis.clock=100000;Date.now=()=>clock;Math.random=()=>.5;obstacles=[];hasLineOfSight=()=>true;checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;for(let i=0;i<7;i++){Object.assign(aiBots[i],{x:i<5?1600:2250,y:1200+(i<5?i: i-5)*90,angle:i<5?0:Math.PI,weapon:'v_vandal',clipAmmo:1000,reserveAmmo:0});ensureBotBrain(aiBots[i]).aimAngle=aiBots[i].angle;}globalThis.advanceShots=0;globalThis.attackShots=0;const realShoot=shoot;shoot=(p,...args)=>{const ammo=p.clipAmmo;realShoot(p,...args);if(p.clipAmmo<ammo&&p.teamId==='team_1'){attackShots++;if(p._entryFight?.advance>0)advanceShots++;}};for(let i=0;i<160;i++){clock+=50;SpikeTactics.tick();}`);
  console.log('5v2 firing diagnostic',h.run('JSON.stringify({attackShots,advanceShots})'));
  assert(h.run('advanceShots>0'),'attackers must not cease firing for their entire advance window');
+});
+test('random role assignment keeps a carrier out of silent lurk and assigns trade teammates',()=>{
+ const h=harness();h.run(`globalThis.roster=Array.from({length:5},(_,i)=>({id:'bot_'+i,teamId:'team_1',hp:100}));Math.random=()=>0;SpikeTactics.assignRoles(roster,'bot_0');globalThis.firstRoles=roster.map(b=>b._tacticOrder).join(',');`);
+ assert.equal(h.run("roster.filter(b=>b._roundRole==='lurk').length"),1);assert.equal(h.run("roster.find(b=>b.id==='bot_0')._roundRole==='lurk'"),false);assert(h.run("roster.some(b=>b._roundRole==='trade')"));
+ h.run(`Math.random=()=>.99;SpikeTactics.assignRoles(roster,'bot_0')`);assert.notEqual(h.run("roster.map(b=>b._tacticOrder).join(',')"),h.run('firstRoles'));
+ h.run(`Math.random=()=>0;globalThis.a=new SpikeTactics.Planner(1,1);Math.random=()=>.99;globalThis.b=new SpikeTactics.Planner(1,1)`);assert.notEqual(h.run('a.site'),h.run('b.site'));assert.notEqual(h.run('a.style'),h.run('b.style'));
+});
+test('assigned lurker approaches quietly and does not emit audible footsteps',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='host';myPlayer.teamId='team_2';aiBots.push({...myPlayer,id:'bot_lurk',teamId:'team_1',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeFrameDt=.05;chooseBotEnemy=()=>null;SpikeTactics.tick();aiBots[0]._roundRole='lurk';spikeMatch.bomb.carrier='other';aiBots[0]._laneChoice=null;aiBots[0]._tacticRoute=null;aiBots[0]._angleOverflow=null;SpikeTactics.tick();`);
+ assert.equal(h.run('aiBots[0].movementMode'),'stealth');assert.equal(h.run('footstepAudible(aiBots[0],aiBots[0].moveSpeed*40)'),false);
 });

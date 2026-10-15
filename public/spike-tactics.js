@@ -12,9 +12,17 @@
    startDelay:next()*.2,hold:400+next()*800,quietRange:300+next()*220,peekSide:next()<.5?-1:1};
  }
  const traits=bot=>bot._tacticPersonality||(bot._tacticPersonality=profile(bot.id));
- function splitRole(bot,index,style,carrier){if(carrier===bot.id)return false;const p=traits(bot);return style==='split'?p.role==='flank'||index%2===1:style==='default'&&p.role==='flank';}
+ function splitRole(bot,index,style,carrier){if(carrier===bot.id)return false;if(bot._roundRole)return bot._roundRole==='lurk';const p=traits(bot);return style==='split'?p.role==='flank'||index%2===1:style==='default'&&p.role==='flank';}
+ function assignRoles(actors,carrier){
+  for(const team of [1,2]){const bots=actors.filter(p=>p.id.startsWith('bot_')&&teamNumber(p)===team);
+   for(let i=bots.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[bots[i],bots[j]]=[bots[j],bots[i]];}
+   for(let i=0;i<bots.length;i++){bots[i]._tacticOrder=i;bots[i]._roundRole=i===0?'entry':'trade';}
+   const count=bots.length>=3?Math.max(1,Math.floor(bots.length/4)):0;
+   bots.filter(p=>p.id!==carrier).slice(-count||bots.length).forEach(p=>p._roundRole='lurk');
+  }
+ }
  class Planner{
-  constructor(round,attackTeam){this.round=round;this.attackTeam=attackTeam;this.site=(round-1)%2;this.style=['group','split','default'][(round-1)%3];this.started=0;this.changed=0;this.contacts=new Map();this.sounds=new Map();}
+  constructor(round,attackTeam){this.round=round;this.attackTeam=attackTeam;this.site=Math.floor(Math.random()*2);this.style=['group','split','default'][Math.floor(Math.random()*3)];this.started=0;this.changed=0;this.contacts=new Map();this.sounds=new Map();}
   hear(team,event){const previous=this.sounds.get(team);if(!previous||event.time>previous.time)this.sounds.set(team,{x:event.x,y:event.y,time:event.time});}
   heard(team,now){const report=this.sounds.get(team);return report&&now-report.time<4500?report:null;}
   report(team,enemy,now){this.contacts.set(team+':'+enemy.id,{team,id:enemy.id,x:enemy.x,y:enemy.y,time:now});}
@@ -97,12 +105,12 @@
  function overflowWatch(bot,brain,point,dt){
   const forward=Math.atan2(point.y-bot.y,point.x-bot.x),p=traits(bot);
   if(!bot._angleOverflow||bot._angleOverflow.until<=trafficClock){
-   const lurk=p.role==='flank'||p.role==='entry',side=p.peekSide;
-   const goals=lurk?[{x:bot.x+Math.cos(forward+side*1.15)*320,y:bot.y+Math.sin(forward+side*1.15)*320},{x:bot.x+Math.cos(forward-side*1.15)*220,y:bot.y+Math.sin(forward-side*1.15)*220}]:[{x:bot.x-Math.cos(forward)*140,y:bot.y-Math.sin(forward)*140}];
-   bot._angleOverflow={until:trafficClock+2.2,role:lurk?'angle_lurk':'rear_guard',goal:goals.find(g=>!checkBotNavigationCollision(g.x,g.y,20))||{x:bot.x,y:bot.y},source:{...point},phase:spikeState?.phase};
+   const lurk=bot._roundRole==='lurk',side=p.peekSide;
+   const goals=lurk?[{x:bot.x+Math.cos(forward+side*1.15)*320,y:bot.y+Math.sin(forward+side*1.15)*320},{x:bot.x+Math.cos(forward-side*1.15)*220,y:bot.y+Math.sin(forward-side*1.15)*220}]:[{x:bot.x+Math.cos(forward+side*.8)*180,y:bot.y+Math.sin(forward+side*.8)*180},{x:bot.x+Math.cos(forward-side*.8)*180,y:bot.y+Math.sin(forward-side*.8)*180}];
+   bot._angleOverflow={until:trafficClock+2.2,role:lurk?'angle_lurk':'trade_support',goal:goals.find(g=>!checkBotNavigationCollision(g.x,g.y,20))||{x:bot.x,y:bot.y},source:{...point},phase:spikeState?.phase};
   }
   // Distribute the rear/flank watchers too, rather than creating a second pile-up.
-  const offsets=[Math.PI,Math.PI-.65,Math.PI+.65,1.65,-1.65,1,-1,.65,-.65];
+  const offsets=[.35,-.35,.65,-.65,1,-1,1.3,-1.3];
   for(const offset of offsets){const a=forward+offset,target={x:bot.x+Math.cos(a)*400,y:bot.y+Math.sin(a)*400};if(reserveAim(bot,target)){turnBotAim(bot,brain,a,dt);return;}}
  }
  function watch(bot,brain,point,dt){if(!point)return;if(reserveAim(bot,point)){bot._angleOverflow=null;turnBotAim(bot,brain,Math.atan2(point.y-bot.y,point.x-bot.x),dt);}else overflowWatch(bot,brain,point,dt);}
@@ -218,7 +226,7 @@
  function tick(){
   if(!isHost||!spikeMatch||!['prep','live','planted'].includes(spikeState?.phase))return;
   const now=Date.now(),dt=Math.max(.001,spikeFrameDt),actors=aliveActors(),bomb=spikeMatch.bomb;
-  if(!planner||planner.round!==spikeMatch.round){planner=new Planner(spikeMatch.round,spikeMatch.attackTeam);traffic.clear();trafficClock=0;for(const bot of aiBots){bot._focusTarget=null;bot._entryFight=null;bot._patrol=null;bot._aimClaim=null;bot._angleOverflow=null;bot._angleHold=null;bot._tacticRoute=null;bot._navigation=null;bot._requestLaneSwap=false;bot._laneSwapAt=0;bot._trafficCell=null;bot._retakeWaitAt=0;bot._duelStart=0;bot._duelCover=null;const brain=ensureBotBrain(bot);brain._teamStepId=0;brain.observed=null;brain.scanAt=0;brain.targetId=null;brain.lastSeenAt=0;brain.burstLeft=0;brain.burstPauseUntil=0;bot.investigateTarget=null;}}
+  if(!planner||planner.round!==spikeMatch.round){planner=new Planner(spikeMatch.round,spikeMatch.attackTeam);traffic.clear();trafficClock=0;assignRoles(actors,bomb.carrier);for(const bot of aiBots){bot._focusTarget=null;bot._entryFight=null;bot._patrol=null;bot._aimClaim=null;bot._angleOverflow=null;bot._angleHold=null;bot._tacticRoute=null;bot._navigation=null;bot._requestLaneSwap=false;bot._laneSwapAt=0;bot._trafficCell=null;bot._retakeWaitAt=0;bot._duelStart=0;bot._duelCover=null;const brain=ensureBotBrain(bot);brain._teamStepId=0;brain.observed=null;brain.scanAt=0;brain.targetId=null;brain.lastSeenAt=0;brain.burstLeft=0;brain.burstPauseUntil=0;bot.investigateTarget=null;}}
   trafficClock+=dt;
   for(const bot of aiBots){if(bot._tacticPhase!==spikeState.phase){bot._tacticPhase=spikeState.phase;bot._phaseAge=0;}bot._phaseAge=(bot._phaseAge||0)+dt;}
   if(spikeState.phase==='prep'){
@@ -227,7 +235,7 @@
    const chosen=human?SpikeRules.SITES.reduce((a,b)=>distance(carrier,a)<distance(carrier,b)?a:b):SpikeRules.SITES[planner.site];
    const siteIndex=SpikeRules.SITES.indexOf(chosen);
    for(const bot of aiBots){if(!live(bot))continue;const brain=ensureBotBrain(bot),team=teamNumber(bot),attack=team===planner.attackTeam;
-    const friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
+    const friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>(a._tacticOrder??-1)-(b._tacticOrder??-1)||a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
     const split=splitRole(bot,index,planner.style,bomb.carrier);
     const base=attack?SpikeRules.PREP_STAGING.attack[split?2:siteIndex]:SpikeRules.PREP_STAGING.defense[index%3===2?2:index%2];
     const p=traits(bot),angle=p.angle+index*.8;const candidates=[{x:base.x+Math.cos(angle)*42,y:base.y+Math.sin(angle)*42},{x:base.x-Math.cos(angle)*24,y:base.y-Math.sin(angle)*24},{x:base.x+(index%3-1)*35,y:base.y+Math.floor(index/3)*35},base];
@@ -248,13 +256,13 @@
   const defuser=!humanDefusing&&bomb.planted?defenders.filter(p=>p.id.startsWith('bot_')).sort((a,b)=>distance(a,bomb)-distance(b,bomb)||a.id.localeCompare(b.id))[0]:null;
   for(const bot of aiBots){if(!live(bot))continue;const brain=ensureBotBrain(bot),team=teamNumber(bot),attack=team===planner.attackTeam;
    brain.movementRequested=false;stop(bot,brain);bot._spikeMoveBudget=SpikeRules.movementDistance(dt,false,bot.weapon);
-   const enemy=observed.get(bot.id),friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
+   const enemy=observed.get(bot.id),friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>(a._tacticOrder??-1)-(b._tacticOrder??-1)||a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
    const entering=attack&&!bomb.planted;
    const engage=entering?entryWindow(bot,enemy,dt):!!enemy;
    const sound=planner.heard(team,now);
    const overflow=bot._angleOverflow;
    if(!entering&&!enemy&&!sound&&overflow&&overflow.phase===spikeState.phase&&trafficClock<overflow.until&&bomb.carrier!==bot.id&&bot!==defuser){
-    brain.state=overflow.role;if(distance(bot,overflow.goal)>25)move(bot,brain,overflow.goal,overflow.role==='rear_guard'&&spikeState.time>14);
+    brain.state=overflow.role;if(distance(bot,overflow.goal)>25)move(bot,brain,overflow.goal,overflow.role==='angle_lurk'&&spikeState.time>14);
     overflowWatch(bot,brain,overflow.source,dt);continue;
    }
    if(enemy&&engage){const ammo=bot.clipAmmo;combat(bot,brain,enemy,now,dt,entering||!attack);
@@ -266,7 +274,11 @@
    if(bot.clipAmmo<=0&&bot.reserveAmmo>0&&!bot.isReloading)reloadWeapon(bot);
    let goal=null;const known=planner.known(team,now),recent=known.sort((a,b)=>b.time-a.time)[0];
    const tradeBuddy=friends.find(p=>p.id!==bot.id&&observed.has(p.id)&&distance(bot,p)<650);
-   if(!entering&&tradeBuddy&&recent&&now-recent.time<1000&&bomb.carrier!==bot.id&&!bomb.planted){brain.state='trade_support';move(bot,brain,safePosition(bot,tradeBuddy,index*2.4));watch(bot,brain,recent,dt);continue;}
+   if(bot._roundRole==='trade'&&recent&&now-recent.time<1200&&distance(bot,recent)<950&&bomb.carrier!==bot.id&&!bomb.planted){
+    brain.state='trade_support';const source=tradeBuddy||bot,a=Math.atan2(recent.y-source.y,recent.x-source.x),side=traits(bot).peekSide;
+    const support={x:recent.x-Math.cos(a)*220+Math.cos(a+Math.PI/2)*side*120,y:recent.y-Math.sin(a)*220+Math.sin(a+Math.PI/2)*side*120};
+    move(bot,brain,safePosition(bot,support,index));watch(bot,brain,recent,dt);continue;
+   }
    if(bomb.planted){
     if(attack){brain.state='postplant_hold';const angle=holdAngle(bot,'postplant:'+team+':'+bomb.site,bomb.site,friends);goal=angle?.position||safePosition(bot,bomb,index*2.4);if(distance(bot,goal)>45)move(bot,brain,goal,quietApproach('planted',spikeState.time,true,false));watch(bot,brain,angle?.target||call(bomb.site==='A'?'TREE':'MARKET'),dt);}
     else {
@@ -296,7 +308,7 @@
      brain.state=plan.style==='rotate'?'site_rotation':split?'split_entry':plan.style==='default'?'default_control':'group_entry';
      const point=points.filter(Boolean)[bot._tacticRoute?.index||0]||chosen;
      const spread=safePosition(bot,point,index*2.4),nearMate=friends.find(p=>p.id!==bot.id&&distance(bot,p)<38);
-     goal=route(bot,brain,points,'attack:'+siteIndex+':'+split,false);
+     goal=route(bot,brain,points,'attack:'+siteIndex+':'+split,bot._roundRole==='lurk'&&!enemy&&spikeState.time>22);
      if(enemy)attackAdvanceFire(bot,brain,enemy,now,dt);else watch(bot,brain,recent||goal||spread,dt);
     }
    }else{
@@ -305,12 +317,12 @@
     const contact=soundSite||(recent&&distance(recent,SpikeRules.SITES[0])<650?SpikeRules.SITES[0]:recent&&distance(recent,SpikeRules.SITES[1])<650?SpikeRules.SITES[1]:null);
     const anchor=index<2,respond=contact&&(!!sound||!anchor||distance(bot,contact)<1000||spikeState.time<35);
     const heldSite=respond?contact:assigned,area=heldSite.name==='A'||heldSite.name==='B'?heldSite.name:'MID';const angle=holdAngle(bot,'defend:'+team+':'+area,area,friends);goal=angle?(respond||index===0?angle.position:patrolGoal(bot,angle,dt)):safePosition(bot,heldSite,index*2.4);brain.state=respond?'defense_support':index===0?'hold_angle':'defense_patrol';
-    if(distance(bot,goal)>55)move(bot,brain,goal,!sound&&quietApproach('live',spikeState.time,false,!!recent&&distance(bot,recent)<950||!!bot.investigateTarget&&now-bot.investigateTarget.time<1500));watch(bot,brain,angle?.target||recent||call(index%2?'B MAIN':'A MAIN'),dt);
+    if(distance(bot,goal)>55)move(bot,brain,goal,!sound&&(bot._roundRole==='lurk'||quietApproach('live',spikeState.time,false,!!recent&&distance(bot,recent)<950||!!bot.investigateTarget&&now-bot.investigateTarget.time<1500)));watch(bot,brain,angle?.target||recent||call(index%2?'B MAIN':'A MAIN'),dt);
    }
    // Approximate sound direction may change the watched angle; it never gives a live enemy position.
    listenForBotThreats(bot,brain,now);listenForBotFootsteps(bot,brain,now);
    if(bot.investigateTarget&&now-bot.investigateTarget.time<1500)watch(bot,brain,bot.investigateTarget,dt);
   }
  }
- root.SpikeTactics={Planner,profile,quietApproach,routeCost,move,ANGLE_LIMIT,sameAngle,reserveAim,watch,angleOptions,assignAngle,patrolGoal,entryWindow,focusedEnemy,tick};
+ root.SpikeTactics={Planner,assignRoles,profile,quietApproach,routeCost,move,ANGLE_LIMIT,sameAngle,reserveAim,watch,angleOptions,assignAngle,patrolGoal,entryWindow,focusedEnemy,tick};
 })(globalThis);
