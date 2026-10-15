@@ -140,9 +140,9 @@
     const spot=slots[i%slots.length];p.x=spot.x;p.y=spot.y;
     const lost=p.isDead||p.hp<=0||this.round===1||!p.loadout;
     if(this.round===1){p.credits=800;p.lossStreak=0;}
-    if(lost){p.loadout={primary:fresh('v_vandal'),secondary:null};p.shieldType=null;p.shield=0;p.shieldPool=0;}
+    if(lost){p.loadout={primary:null,secondary:fresh('v_classic')};p.shieldType=null;p.shield=0;p.shieldPool=0;}
     for(const slot of ['primary','secondary'])if(p.loadout?.[slot])p.loadout[slot]=catalog()[p.loadout[slot].id]?fresh(p.loadout[slot].id):null;
-    if(!p.loadout.primary)p.loadout.primary=fresh('v_vandal');
+    if(!p.loadout.secondary)p.loadout.secondary=fresh('v_classic');
     p.weapon=null;p.activeSlot=null;equip(p,p.loadout.primary?'primary':'secondary');p.purchases={};p._shieldDelay=0;
     p._prepSafe={x:p.x,y:p.y};p.hp=100;p.maxHp=100;p.isDead=false;p.isDowned=false;p.isMoving=false;p.isShooting=false;p._spikeUse=false;p.isReloading=false;
     p.equippedBodyArmor=null;p.equippedHelmet=null;

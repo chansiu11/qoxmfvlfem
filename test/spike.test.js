@@ -165,10 +165,10 @@ test('quiet walking suppresses footsteps and general hearing uses metre scale',(
  h.run(`isHost=true;myPlayer.hp=200;myPlayer.isDead=false;myPlayer.movementMode='stealth';footstepTracks.clear();footstepCheckAt=0;updateFootsteps();myPlayer.x+=30;footstepCheckAt=0;updateFootsteps();`);
  assert.equal(h.run('footstepEvents.length'),0);
 });
-test('three-gun store enforces funds, refunds, survivor gear and free respawn rifle',()=>{
- const p=actors(),m=new Match(()=>p),a=p[0];assert.equal(a.credits,800);assert.equal(a.weapon,'v_vandal');assert(!m.buy(a,'v_bucky'));a.credits=1000;
- assert(m.buy(a,'v_bucky'));assert.equal(a.credits,150);assert(m.sell(a,'primary'));assert.equal(a.credits,1000);assert.equal(a.weapon,'v_vandal');assert(!m.sell(a,'primary'));
- assert(m.buy(a,'v_operator'));assert.equal(a.credits,50);tick(m,30.1);assert(!m.buy(a,'v_vandal'));m.finish(1,'win');tick(m,6.1);assert.equal(a.weapon,'v_operator');assert(!m.sell(a,'primary'));a.hp=0;a.isDead=true;m.begin();assert.equal(a.weapon,'v_vandal');assert.equal(a.loadout.secondary,null);assert(!m.buy(a,'v_classic'));
+test('free pistol starts and respawns, primaries cost money, switching and refunds preserve sidearm',()=>{
+ const p=actors(),m=new Match(()=>p),a=p[0];assert.equal(a.credits,800);assert.equal(a.weapon,'v_classic');assert.equal(a.clipAmmo,12);assert.equal(a.loadout.primary,null);assert(!m.buy(a,'v_vandal'));a.credits=2000;
+ assert(m.buy(a,'v_vandal'));assert.equal(a.credits,400);a.clipAmmo=24;assert(m.switch(a,'secondary'));assert.equal(a.weapon,'v_classic');a.clipAmmo=9;assert(m.switch(a,'primary'));assert.equal(a.clipAmmo,24);assert(m.sell(a,'primary'));assert.equal(a.credits,2000);assert.equal(a.weapon,'v_classic');assert.equal(a.clipAmmo,9);
+ assert(m.buy(a,'v_bucky'));tick(m,30.1);assert(!m.buy(a,'v_operator'));m.finish(1,'win');tick(m,6.1);assert.equal(a.weapon,'v_bucky');assert.equal(a.loadout.secondary.id,'v_classic');assert(!m.sell(a,'primary'));a.hp=0;a.isDead=true;m.begin();assert.equal(a.weapon,'v_classic');assert.equal(a.loadout.primary,null);assert.equal(a.clipAmmo,12);
 });
 test('shield damage separates HP, exhausts armor and regenerates only from reserve after delay',()=>{
  const p=actors(),m=new Match(()=>p),a=p[0];a.credits=9000;m.buy(a,'heavy');
@@ -177,9 +177,9 @@ test('shield damage separates HP, exhausts armor and regenerates only from reser
  SpikeRules.shieldDamage(a,25);tick(m,4.2);assert.equal(a.shield,25);assert.equal(a.shieldPool,0);SpikeRules.shieldDamage(a,25);tick(m,5);assert.equal(a.shield,0);
 });
 test('three general guns match deathmatch ballistics and reloads; shotgun only renamed',()=>{
- const h=harness();assert.equal(Object.keys(SpikeCatalog.weapons).length,3);
- for(const w of Object.values(SpikeCatalog.weapons)){
-  for(const k of ['cooldown','bulletSpeed','damage','pellets','spread','maxClip'])assert.equal(w[k],h.run(`WEAPONS['${w.deathmatchWeapon}']['${k}']`));
+ const h=harness();assert.equal(Object.keys(SpikeCatalog.weapons).length,4);
+ for(const w of Object.values(SpikeCatalog.weapons).filter(w=>w.slot==='primary')){
+  for(const k of ['cooldown','bulletSpeed','damage','pellets','spread','maxClip'])assert.equal(w[k],w.id==='v_operator'&&k==='damage'?82:h.run(`WEAPONS['${w.deathmatchWeapon}']['${k}']`));
   assert.equal(w.reloadMs,1500);assert.equal(SpikeRules.bulletDamage({weapon:w.id,startX:0,startY:0},{x:2000,y:0}),w.damage);
  }
  assert.equal(SpikeCatalog.weapons.v_bucky.name,'버키');
@@ -388,4 +388,9 @@ test('defense patrol changes position on a bounded cycle and refuses blocked pee
  const h=harness();h.run(`globalThis.patrolBot={id:'bot_patrol',x:1000,y:1000};globalThis.slot={id:'test',position:{x:1000,y:1000},target:{x:1500,y:1000}};checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;globalThis.first=SpikeTactics.patrolGoal(patrolBot,slot,.05);for(let i=0;i<120;i++)SpikeTactics.patrolGoal(patrolBot,slot,.05);globalThis.second=SpikeTactics.patrolGoal(patrolBot,slot,.05);`);
  assert(h.run('Math.hypot(first.x-second.x,first.y-second.y)>100'));
  h.run('checkBotNavigationCollision=()=>true;patrolBot._patrol=null');assert.equal(h.run('SpikeTactics.patrolGoal(patrolBot,slot,.05).x'),1000);
+});
+
+test('unarmored full health dies to one sniper plus one pistol shot, armor still absorbs',()=>{
+ const p=actors(),m=new Match(()=>p),target=p[1];const hit=id=>{const b={weapon:id,startX:target.x,startY:target.y};target.hp-=SpikeRules.shieldDamage(target,SpikeRules.bulletDamage(b,target));};
+ hit('v_operator');assert.equal(target.hp,18);hit('v_classic');assert.equal(target.hp,0);target.hp=100;target.shieldType='heavy';target.shield=50;hit('v_operator');hit('v_classic');assert(target.hp>0);
 });
