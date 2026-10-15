@@ -30,3 +30,6 @@ Shared-angle cap: watch and combat requests now reserve the actual local aim sec
 - Non-anchor defenders periodically use collision-checked 80-unit lateral peeks or 150-unit forward positions. One anchor keeps its assigned position. Existing two-bot angle reservations and visible-target-only firing still apply.
 - Spectator controls have explicit dimensions that survive saved UI positioning; left/right buttons, arrow keys and canvas mouse clicks cycle targets. Switching immediately updates the camera, filters concealed preparation snapshots and deduplicates participant IDs.
 - Verified with packed-game VM regression tests; device/browser playtesting remains unperformed.
+
+### More active bots (2026-10-15)
+Initial stagger is at most 0.2 seconds and default entry pause is 0.4–1.2 seconds. Non-anchor defenders reconsider collision-checked peek positions every 1.6–2.4 seconds, using 110-unit lateral or 220-unit forward positions. Non-anchor combat roles close excessive distance after 450 ms, trade support reaches teammates within 650 units, and retake regroup lasts at most 450 ms. Lurkers travel at normal weapon speed; close site approaches still walk quietly. Removed redundant crowded-teammate waiting because navigation already handles spacing. Two-bot angle limits, line-of-sight firing and movement speed limits remain.

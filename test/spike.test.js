@@ -385,7 +385,7 @@ test('spectator switches both ways across modes, ignores hidden snapshots and up
  }
 });
 test('defense patrol changes position on a bounded cycle and refuses blocked peeks',()=>{
- const h=harness();h.run(`globalThis.patrolBot={id:'bot_patrol',x:1000,y:1000};globalThis.slot={id:'test',position:{x:1000,y:1000},target:{x:1500,y:1000}};checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;globalThis.first=SpikeTactics.patrolGoal(patrolBot,slot,.05);for(let i=0;i<120;i++)SpikeTactics.patrolGoal(patrolBot,slot,.05);globalThis.second=SpikeTactics.patrolGoal(patrolBot,slot,.05);`);
+ const h=harness();h.run(`globalThis.patrolBot={id:'bot_patrol',x:1000,y:1000};globalThis.slot={id:'test',position:{x:1000,y:1000},target:{x:1500,y:1000}};checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;globalThis.first=SpikeTactics.patrolGoal(patrolBot,slot,.05);for(let i=0;i<50;i++)SpikeTactics.patrolGoal(patrolBot,slot,.05);globalThis.second=SpikeTactics.patrolGoal(patrolBot,slot,.05);`);
  assert(h.run('Math.hypot(first.x-second.x,first.y-second.y)>100'));
  h.run('checkBotNavigationCollision=()=>true;patrolBot._patrol=null');assert.equal(h.run('SpikeTactics.patrolGoal(patrolBot,slot,.05).x'),1000);
 });
