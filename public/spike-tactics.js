@@ -161,6 +161,14 @@
   if(brain.targetId!==enemy.id||now-brain.lastSeenAt>900){brain.targetId=enemy.id;brain.reactionUntil=now+Math.max(180,Math.min(650,diff.delay*.5*p.reaction)) + Math.random()*140;brain.burstLeft=0;brain.burstPauseUntil=0;bot._duelStart=now;}
   brain.lastSeenAt=now;brain.lastKnown={x:enemy.x,y:enemy.y};brain.enemyVx=0;brain.enemyVy=0;
   const w=WEAPONS[bot.weapon];if(!w)return;
+  // Seeing a target is not the same as being in weapon range. Keep closing until a shot is possible.
+  if(standGround&&distance(bot,enemy)>getBotWeaponRange(bot).max*.92){brain.state='close_to_fire';move(bot,brain,enemy);watch(bot,brain,enemy,dt);return;}
+  if(standGround&&!bot.isReloading&&bot.clipAmmo>0&&isFriendlyInFireLane(bot,enemy)){
+   brain.state='clear_fire_lane';const forward=Math.atan2(enemy.y-bot.y,enemy.x-bot.x);
+   const side=traits(bot).peekSide,options=[side,-side].map(sign=>({x:bot.x+Math.cos(forward+sign*Math.PI/2)*80,y:bot.y+Math.sin(forward+sign*Math.PI/2)*80}));
+   const goal=options.find(point=>!checkBotNavigationCollision(point.x,point.y,20)&&botSegmentClear(bot,point));
+   if(goal)move(bot,brain,goal);watch(bot,brain,enemy,dt);return;
+  }
   const hurt=bot.hp<brain.lastHp;brain.lastHp=bot.hp;
   if(bot.isReloading||bot.clipAmmo<=0||(!standGround&&(bot.hp<p.caution||hurt))){
    if(bot.clipAmmo<=0&&bot.reserveAmmo>0&&!bot.isReloading)reloadWeapon(bot);

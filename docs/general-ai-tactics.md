@@ -37,3 +37,6 @@ Initial stagger is at most 0.2 seconds and default entry pause is 0.4–1.2 seco
 ### Fast entry and defender footstep communication
 Attackers enter at normal weapon speed without staging pauses or stopping to trade for nearby teammates. After an actual shot, a single random 0–1 second timer runs; on expiry they resume their site route for at least 1.5 seconds even if the target stays visible. This timer resets each round. Aim-sector overflow also yields to entry rather than stalling it.
 Defenders share enemy footsteps only when one living defender can hear a fresh event inside its audible range. Reports expire after 4.5 seconds and nominate the nearest site; all idle defenders, including anchors, rotate there. Reports do not grant enemy vision or authorize shooting. Visible enemies take combat priority; low HP and being hit no longer trigger retreat for defenders, though empty magazines/reloading can still seek cover.
+
+### Entry firing fix
+Stand-ground engagements no longer halt outside weapon range: bots close to 92% of maximum range, then fire. When an ally blocks the firing lane, they choose a collision-checked lateral position instead of waiting indefinitely. Regression simulations use real perception and projectile creation, with fake elapsed time, for both out-of-range approach and a friendly blocker.
