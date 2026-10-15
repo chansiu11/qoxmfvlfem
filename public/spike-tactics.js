@@ -164,6 +164,13 @@
   if(!visible(target))return null;
   bot._focusTarget=target.id;return {id:target.id,x:target.x,y:target.y,isDowned:!!target.isDowned};
  }
+ function attackPressure(bot,dt){
+  const durability=Math.max(0,bot.hp)+Math.max(0,bot.shield||0);
+  const state=bot._attackPressure||(bot._attackPressure={last:durability,hold:0,cover:null});
+  state.hold=Math.max(0,state.hold-dt);
+  if(durability<state.last){state.hold=.75;state.cover=null;if(bot._entryFight){bot._entryFight.advance=0;bot._entryFight.wait=null;}}
+  state.last=durability;return state;
+ }
  function entryWindow(bot,enemy,dt){
   const state=bot._entryFight||(bot._entryFight={wait:null,advance:0});
   if(state.advance>0){state.advance=Math.max(0,state.advance-dt);return false;}
@@ -226,7 +233,7 @@
  function tick(){
   if(!isHost||!spikeMatch||!['prep','live','planted'].includes(spikeState?.phase))return;
   const now=Date.now(),dt=Math.max(.001,spikeFrameDt),actors=aliveActors(),bomb=spikeMatch.bomb;
-  if(!planner||planner.round!==spikeMatch.round){planner=new Planner(spikeMatch.round,spikeMatch.attackTeam);traffic.clear();trafficClock=0;assignRoles(actors,bomb.carrier);for(const bot of aiBots){bot._focusTarget=null;bot._entryFight=null;bot._patrol=null;bot._aimClaim=null;bot._angleOverflow=null;bot._angleHold=null;bot._tacticRoute=null;bot._navigation=null;bot._requestLaneSwap=false;bot._laneSwapAt=0;bot._trafficCell=null;bot._retakeWaitAt=0;bot._duelStart=0;bot._duelCover=null;const brain=ensureBotBrain(bot);brain._teamStepId=0;brain.observed=null;brain.scanAt=0;brain.targetId=null;brain.lastSeenAt=0;brain.burstLeft=0;brain.burstPauseUntil=0;bot.investigateTarget=null;}}
+  if(!planner||planner.round!==spikeMatch.round){planner=new Planner(spikeMatch.round,spikeMatch.attackTeam);traffic.clear();trafficClock=0;assignRoles(actors,bomb.carrier);for(const bot of aiBots){bot._attackPressure={last:Math.max(0,bot.hp)+Math.max(0,bot.shield||0),hold:0,cover:null};bot._focusTarget=null;bot._entryFight=null;bot._patrol=null;bot._aimClaim=null;bot._angleOverflow=null;bot._angleHold=null;bot._tacticRoute=null;bot._navigation=null;bot._requestLaneSwap=false;bot._laneSwapAt=0;bot._trafficCell=null;bot._retakeWaitAt=0;bot._duelStart=0;bot._duelCover=null;const brain=ensureBotBrain(bot);brain._teamStepId=0;brain.observed=null;brain.scanAt=0;brain.targetId=null;brain.lastSeenAt=0;brain.burstLeft=0;brain.burstPauseUntil=0;bot.investigateTarget=null;}}
   trafficClock+=dt;
   for(const bot of aiBots){if(bot._tacticPhase!==spikeState.phase){bot._tacticPhase=spikeState.phase;bot._phaseAge=0;}bot._phaseAge=(bot._phaseAge||0)+dt;}
   if(spikeState.phase==='prep'){
@@ -258,6 +265,18 @@
    brain.movementRequested=false;stop(bot,brain);bot._spikeMoveBudget=SpikeRules.movementDistance(dt,false,bot.weapon);
    const enemy=observed.get(bot.id),friends=actors.filter(p=>teamNumber(p)===team).sort((a,b)=>(a._tacticOrder??-1)-(b._tacticOrder??-1)||a.id.localeCompare(b.id)),index=friends.findIndex(p=>p.id===bot.id);
    const entering=attack&&!bomb.planted;
+   const pressure=entering?attackPressure(bot,dt):null;
+   if(pressure?.hold>0){
+    const threat=enemy||planner.known(team,now).sort((a,b)=>b.time-a.time)[0];
+    const canDuel=enemy&&distance(bot,enemy)<=getBotWeaponRange(bot).max*.92&&bot.clipAmmo>0&&!bot.isReloading;
+    if(threat&&(!canDuel||bot.hp<35)){
+     if(!pressure.cover)pressure.cover=findBotCoverPoint(bot,threat);
+     if(pressure.cover&&distance(bot,pressure.cover)>22){brain.state='entry_seek_cover';move(bot,brain,pressure.cover);watch(bot,brain,threat,dt);continue;}
+    }
+    if(canDuel){combat(bot,brain,enemy,now,dt,true);brain.state='entry_return_fire';}
+    else{brain.state='entry_under_fire';if(bot.clipAmmo<=0&&bot.reserveAmmo>0&&!bot.isReloading)reloadWeapon(bot);if(threat)watch(bot,brain,threat,dt);}
+    continue;
+   }
    const engage=entering?entryWindow(bot,enemy,dt):!!enemy;
    const sound=planner.heard(team,now);
    const overflow=bot._angleOverflow;
@@ -324,5 +343,5 @@
    if(bot.investigateTarget&&now-bot.investigateTarget.time<1500)watch(bot,brain,bot.investigateTarget,dt);
   }
  }
- root.SpikeTactics={Planner,assignRoles,profile,quietApproach,routeCost,move,ANGLE_LIMIT,sameAngle,reserveAim,watch,angleOptions,assignAngle,patrolGoal,entryWindow,focusedEnemy,tick};
+ root.SpikeTactics={Planner,assignRoles,profile,quietApproach,routeCost,move,ANGLE_LIMIT,sameAngle,reserveAim,watch,angleOptions,assignAngle,patrolGoal,entryWindow,attackPressure,focusedEnemy,tick};
 })(globalThis);

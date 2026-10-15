@@ -444,3 +444,12 @@ test('assigned lurker approaches quietly and does not emit audible footsteps',()
  const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='host';myPlayer.teamId='team_2';aiBots.push({...myPlayer,id:'bot_lurk',teamId:'team_1',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeFrameDt=.05;chooseBotEnemy=()=>null;SpikeTactics.tick();aiBots[0]._roundRole='lurk';spikeMatch.bomb.carrier='other';aiBots[0]._laneChoice=null;aiBots[0]._tacticRoute=null;aiBots[0]._angleOverflow=null;SpikeTactics.tick();`);
  assert.equal(h.run('aiBots[0].movementMode'),'stealth');assert.equal(h.run('footstepAudible(aiBots[0],aiBots[0].moveSpeed*40)'),false);
 });
+test('attacker damage including shield cancels forced advance and expires after safe interval',()=>{
+ const h=harness();h.run(`globalThis.p={hp:100,shield:50,_entryFight:{advance:1.5,wait:null}};SpikeTactics.attackPressure(p,.05);p.shield=30;`);assert.equal(h.run('SpikeTactics.attackPressure(p,.05).hold'),.75);assert.equal(h.run('p._entryFight.advance'),0);
+ h.run('for(let i=0;i<16;i++)SpikeTactics.attackPressure(p,.05)');assert.equal(h.run('p._attackPressure.hold'),0);h.run('p.hp=70');assert.equal(h.run('SpikeTactics.attackPressure(p,.05).hold'),.75);
+});
+test('hit attacker stops exposed advance and fires back while defender pressure logic stays inactive',()=>{
+ const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='enemy';myPlayer.teamId='team_2';aiBots.push({...myPlayer,id:'bot_attack',teamId:'team_1',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeFrameDt=.05;obstacles=[];hasLineOfSight=()=>true;checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;Object.assign(myPlayer,{x:1300,y:1000});Object.assign(aiBots[0],{x:1000,y:1000,angle:0});ensureBotBrain(aiBots[0]).aimAngle=0;chooseBotEnemy=()=>myPlayer;SpikeTactics.tick();aiBots[0]._entryFight={advance:1.5,wait:null};aiBots[0].hp=82;globalThis.attempts=0;updateHumanBotAim=()=>attempts++;SpikeTactics.tick()`);
+ assert.equal(h.run('aiBots[0]._brain.state'),'entry_return_fire');assert.equal(h.run('aiBots[0].isMoving'),false);assert.equal(h.run('attempts'),1);
+ h.run(`aiBots[0].teamId='team_2';myPlayer.teamId='team_1';aiBots[0]._attackPressure=null;SpikeTactics.tick()`);assert.equal(h.run('aiBots[0]._attackPressure'),null);
+});
