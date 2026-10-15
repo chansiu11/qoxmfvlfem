@@ -200,7 +200,7 @@ test('store opens in prep, shows weapon categories and armor, closes on live pha
 });
 test('packed rifle shot consumes purchased heavy shield and damages HP on host',()=>{
  const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;isSpawnSelecting=false;isSpectating=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};hasLineOfSight=()=>true;myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.x=100;myPlayer.y=100;myPlayer.angle=0;myPlayer.weapon='v_vandal';myPlayer.clipAmmo=25;myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isShooting=false;myPlayer.isReloading=false;spikeState={phase:'live'};remotePlayers.enemy={id:'enemy',x:175,y:100,hp:100,maxHp:100,isDead:false,teamId:'team_2',shieldType:'heavy',shield:50,weapon:'v_classic'};shoot(myPlayer,0);originalUpdate();`);
- assert.equal(h.run('myPlayer.clipAmmo'),24);assert(Math.abs(h.run('remotePlayers.enemy.shield')-36.8)<1e-6);assert(Math.abs(h.run('remotePlayers.enemy.hp')-93.2)<1e-6);
+ assert.equal(h.run('myPlayer.clipAmmo'),24);assert(Math.abs(h.run('remotePlayers.enemy.shield')-30)<1e-6);assert(Math.abs(h.run('remotePlayers.enemy.hp')-100)<1e-6);
 });
 test('all catalog guns set frame-independent movement and quiet speeds without affecting deathmatch',()=>{
  const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=false;isMobile=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};myPlayer.isDead=false;myPlayer.hp=100;keys['d']=true;`);
@@ -393,4 +393,9 @@ test('defense patrol changes position on a bounded cycle and refuses blocked pee
 test('unarmored full health dies to one sniper plus one pistol shot, armor still absorbs',()=>{
  const p=actors(),m=new Match(()=>p),target=p[1];const hit=id=>{const b={weapon:id,startX:target.x,startY:target.y};target.hp-=SpikeRules.shieldDamage(target,SpikeRules.bulletDamage(b,target));};
  hit('v_operator');assert.equal(target.hp,18);hit('v_classic');assert.equal(target.hp,0);target.hp=100;target.shieldType='heavy';target.shield=50;hit('v_operator');hit('v_classic');assert(target.hp>0);
+});
+
+test('all shield types take full damage first and only overflow reaches HP',()=>{
+ for(const type of ['light','heavy','regen']){const a={shieldType:type,shield:25,hp:100};assert.equal(SpikeRules.shieldDamage(a,18),0);assert.equal(a.shield,7);assert.equal(SpikeRules.shieldDamage(a,18),11);assert.equal(a.shield,0);assert.equal(SpikeRules.shieldDamage(a,18),18);}
+ const h=harness();assert(h.html.includes("ctx.fillStyle='#389cff'"));h.run(`selectedMode='spike';gameStarted=true;myPlayer.hp=100;myPlayer.maxHp=100;myPlayer.shieldType='heavy';myPlayer.shield=50;spikeState={round:1,phase:'live',time:100,attackTeam:1,score:[0,0],bomb:{}};spikeUI()`);assert.equal(h.run("document.getElementById('spikeShieldFill').style.width"),(50/150*100)+'%');
 });

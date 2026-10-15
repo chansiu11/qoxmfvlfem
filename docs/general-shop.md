@@ -47,3 +47,6 @@ Combat HUD defaults are compact and placed at screen edges. A one-time migration
 
 ## Default pistol revision
 New players and players returning after death receive a free 12-round pistol in the secondary slot (18 damage, 250 ms cooldown, 1.5 s reload). Surviving players retain their primary. Assault rifle now costs 1600; Bucky remains 850 and sniper 950. PC keys 1/2 and compact HUD buttons switch primary/pistol with separate ammunition. General sniper damage is now 82: one sniper and one pistol hit eliminate an unarmored 100-HP player. Armor continues absorbing damage; deathmatch sniper remains 80.
+
+## Shield-first health
+All general-mode shield types now absorb the entire hit up to remaining shield. Only overflow reaches HP; shield capacity and regeneration timing are unchanged. Character health bars and the compact local HUD show shield in blue beside health. Health damage retains its orange delayed trail.

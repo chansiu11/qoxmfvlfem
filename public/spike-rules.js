@@ -116,7 +116,7 @@
   p._semiLatch=false;p.activeSlot=slot;p.weapon=item.id;p.clipAmmo=item.clip;p.reserveAmmo=item.reserve;p.isReloading=false;p.reloadStartedAt=0;p._reloadToken=(p._reloadToken||0)+1;return true;
  }
  const fresh=id=>({id,clip:catalog()[id].maxClip,reserve:catalog()[id].maxClip*4});
- function shieldDamage(p,damage){const a=gear()[p.shieldType],blocked=a?Math.min(p.shield||0,damage*a.absorb):0;p.shield=Math.max(0,(p.shield||0)-blocked);p._shieldDelay=3;return damage-blocked;}
+ function shieldDamage(p,damage){const a=gear()[p.shieldType],blocked=a?Math.min(Math.max(0,p.shield||0),Math.max(0,damage)):0;p.shield=Math.max(0,(p.shield||0)-blocked);p._shieldDelay=3;return damage-blocked;}
  function bulletDamage(b,p){const w=catalog()[b.weapon];if(!w)return b.damage;const d=Math.hypot(p.x-b.startX,p.y-b.startY)/UNITS_PER_METER;return (w.damageRanges.find(r=>d<r.rangeEndMeters)||w.damageRanges.at(-1)).bodyDamage;}
  const alive=p=>p&&p.hp>0&&!p.isDead&&!p.spectator;
  const inside=(p,r)=>p.x>=r.x+15&&p.x<=r.x+r.w-15&&p.y>=r.y+15&&p.y<=r.y+r.h-15;
