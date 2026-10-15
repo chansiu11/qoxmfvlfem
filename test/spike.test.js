@@ -31,6 +31,7 @@ function harness(){
  vm.runInContext(fs.readFileSync(new URL('../public/spike-mode.js',import.meta.url),'utf8'),c);
  vm.runInContext(fs.readFileSync(new URL('../public/spike-shop.js',import.meta.url),'utf8'),c);
  vm.runInContext(fs.readFileSync(new URL('../public/game-audio.js',import.meta.url),'utf8'),c);
+ vm.runInContext(fs.readFileSync(new URL('../public/host-cheats.js',import.meta.url),'utf8'),c);
  vm.runInContext('render=()=>{};updateHUD=()=>{};',c);
  return {run:s=>vm.runInContext(s,c),html};
 }
@@ -452,4 +453,14 @@ test('hit attacker stops exposed advance and fires back while defender pressure 
  const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='enemy';myPlayer.teamId='team_2';aiBots.push({...myPlayer,id:'bot_attack',teamId:'team_1',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeFrameDt=.05;obstacles=[];hasLineOfSight=()=>true;checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;Object.assign(myPlayer,{x:1300,y:1000});Object.assign(aiBots[0],{x:1000,y:1000,angle:0});ensureBotBrain(aiBots[0]).aimAngle=0;chooseBotEnemy=()=>myPlayer;SpikeTactics.tick();aiBots[0]._entryFight={advance:1.5,wait:null};aiBots[0].hp=82;globalThis.attempts=0;updateHumanBotAim=()=>attempts++;SpikeTactics.tick()`);
  assert.equal(h.run('aiBots[0]._brain.state'),'entry_return_fire');assert.equal(h.run('aiBots[0].isMoving'),false);assert.equal(h.run('attempts'),1);
  h.run(`aiBots[0].teamId='team_2';myPlayer.teamId='team_1';aiBots[0]._attackPressure=null;SpikeTactics.tick()`);assert.equal(h.run('aiBots[0]._attackPressure'),null);
+});
+test('host cheats reject guests, apply only locally and reset on leaving match',()=>{
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=false;myPlayer.credits=100;myPlayer.hp=30;myPlayer.maxHp=100;myPlayer.isDead=false;`);assert.equal(h.run("HostCheats.act('money')"),false);assert.equal(h.run('myPlayer.credits'),100);
+ h.run(`isHost=true;HostCheats.act('heal');HostCheats.act('money');HostCheats.act('shield');HostCheats.act('invincible')`);assert.equal(h.run('myPlayer.hp'),100);assert.equal(h.run('myPlayer.credits'),9000);assert.equal(h.run('myPlayer.shield'),50);assert(h.run('HostCheats.protect(myPlayer)'));assert.equal(h.run('HostCheats.protect({...myPlayer})'),false);
+ h.run(`selectedMode='normal';myPlayer.weapon='ar';myPlayer.clipAmmo=0;myPlayer.isReloading=false;myPlayer.isShooting=false;HostCheats.act('ammo');shoot(myPlayer);`);assert.equal(h.run('myPlayer.clipAmmo'),30);assert(h.run('bullets.length>0'));
+ h.run(`aiBots.push({id:'bot_pause',hp:100,isMoving:true,_spikeUse:true});HostCheats.act('bots');updateAI()`);assert.equal(h.run('aiBots[0].isMoving'),false);assert.equal(h.run('aiBots[0]._spikeUse'),false);
+ h.run('returnToRoomAfterGame();gameStarted=true;isHost=true');assert.equal(h.run('HostCheats.protect(myPlayer)'),false);
+});
+test('host invulnerability blocks real bullet HP and shield damage',()=>{
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;isSpawnSelecting=false;isSpectating=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};hasLineOfSight=()=>true;myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.x=175;myPlayer.y=100;myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isShooting=false;myPlayer.shieldType='heavy';myPlayer.shield=50;spikeState={phase:'live'};remotePlayers.enemy={id:'enemy',x:100,y:100,angle:0,hp:100,isDead:false,teamId:'team_2',weapon:'v_operator',clipAmmo:5};HostCheats.act('invincible');shoot(remotePlayers.enemy,0);originalUpdate();`);assert.equal(h.run('myPlayer.hp'),100);assert.equal(h.run('myPlayer.shield'),50);
 });
