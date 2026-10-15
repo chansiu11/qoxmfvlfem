@@ -264,7 +264,7 @@ test('general tactical bots plant, select one defuser and stop before shooting',
  assert.equal(h.run('aiBots[0]._spikeUse'),true);
  h.run(`spikeMatch.bomb={...SpikeRules.SITES[0],site:'A',planted:true,carrier:null,timer:40};spikeMatch.phase='planted';spikeState=spikeMatch.snapshot();Object.assign(aiBots[1],SpikeRules.SITES[0]);Object.assign(aiBots[2],SpikeRules.SITES[0]);SpikeTactics.tick()`);
  assert.equal(h.run('aiBots.filter(p=>p.teamId===\'team_2\'&&p._spikeUse).length'),1);
- h.run(`spikeMatch.phase='live';spikeState=spikeMatch.snapshot();globalThis.firedMoving=null;chooseBotEnemy=bot=>({id:'visible',x:bot.x+150,y:bot.y});updateHumanBotAim=(bot)=>{firedMoving=bot.isMoving};SpikeTactics.tick()`);
+ h.run(`spikeMatch.phase='live';spikeState=spikeMatch.snapshot();globalThis.firedMoving=null;aiBots[1].hp=0;aiBots[2].hp=0;remotePlayers.visible={id:'visible',teamId:'team_2',hp:100,x:aiBots[0].x+150,y:aiBots[0].y};ensureBotBrain(aiBots[0]).aimAngle=0;hasLineOfSight=()=>true;chooseBotEnemy=()=>remotePlayers.visible;updateHumanBotAim=(bot)=>{firedMoving=bot.isMoving};SpikeTactics.tick()`);
  assert.equal(h.run('firedMoving'),false);
 
 });
@@ -420,4 +420,12 @@ test('attacking bot closes from visible but out-of-range enemy and fires actual 
 test('attacking bot steps around a friendly blocker and fires actual bullets',()=>{
  const h=harness();h.run(`isHost=true;selectedMode='spike';myPlayer.id='defender';myPlayer.teamId='team_2';aiBots.push({...myPlayer,id:'bot_entry',teamId:'team_1',hp:100,isDead:false});spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='live';spikeState=spikeMatch.snapshot();spikeFrameDt=.05;globalThis.clock=100000;Date.now=()=>clock;obstacles=[];hasLineOfSight=()=>true;checkBotNavigationCollision=()=>false;botSegmentClear=()=>true;Object.assign(myPlayer,{x:2500,y:1000,hp:100,isDead:false});Object.assign(aiBots[0],{x:1700,y:1000,angle:0});remotePlayers.ally={id:'ally',teamId:'team_1',hp:100,x:2100,y:1000};ensureBotBrain(aiBots[0]).aimAngle=0;for(let i=0;i<160;i++){clock+=50;SpikeTactics.tick();}`);
  assert(h.run('bullets.length>0'),'attacker must clear the friendly fire lane and shoot');
+});
+test('first visible target stays locked until occluded, out of view, dead or disconnected',()=>{
+ const h=harness();h.run(`selectedMode='spike';myPlayer.id='me';myPlayer.teamId='team_2';myPlayer.hp=0;aiBots.push({id:'bot_focus',teamId:'team_1',x:1000,y:1000,hp:100,weapon:'v_vandal',angle:0});remotePlayers.first={id:'first',teamId:'team_2',x:1600,y:1000,hp:100};remotePlayers.second={id:'second',teamId:'team_2',x:1200,y:1000,hp:100};globalThis.b=aiBots[0];globalThis.brain=ensureBotBrain(b);brain.aimAngle=0;hasLineOfSight=()=>true;chooseBotEnemy=()=>remotePlayers.first;`);
+ assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain).id'),'first');h.run('chooseBotEnemy=()=>remotePlayers.second');assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain).id'),'first');
+ h.run('hasLineOfSight=(a,t)=>t.id!=="first"');assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain).id'),'second');
+ h.run('hasLineOfSight=()=>true;remotePlayers.second.hp=0;chooseBotEnemy=()=>remotePlayers.first');assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain).id'),'first');
+ h.run('remotePlayers.first.x=500;remotePlayers.second.hp=100;chooseBotEnemy=()=>remotePlayers.second');assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain).id'),'second');
+ h.run('delete remotePlayers.second;chooseBotEnemy=()=>null');assert.equal(h.run('SpikeTactics.focusedEnemy(b,brain)'),null);
 });

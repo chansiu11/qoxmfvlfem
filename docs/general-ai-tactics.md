@@ -40,3 +40,6 @@ Defenders share enemy footsteps only when one living defender can hear a fresh e
 
 ### Entry firing fix
 Stand-ground engagements no longer halt outside weapon range: bots close to 92% of maximum range, then fire. When an ally blocks the firing lane, they choose a collision-checked lateral position instead of waiting indefinitely. Regression simulations use real perception and projectile creation, with fake elapsed time, for both out-of-range approach and a friendly blocker.
+
+### First-seen target lock
+General-mode bots retain their first acquired enemy while it remains alive, hostile, within vision range and field of view, and unobstructed by walls. A closer newcomer does not replace it. Lost visibility, death or disconnect clears both the lock and perception cache so a new visible enemy can be selected immediately. Targets are revalidated from current actor state each tick; the lock resets every round.
