@@ -173,7 +173,7 @@
   }
   switch(p,slot){if(!alive(p)||!['prep','live','planted'].includes(this.phase)||p._spikeUse)return false;return equip(p,slot);}
   rewardKill(id){const p=this.actors().find(p=>p.id===id);if(p&&['live','planted'].includes(this.phase))credit(p,200);}
-  finish(team,reason){if(!['live','planted'].includes(this.phase))return;for(const p of this.actors()){if(this.team(p)===team){p.lossStreak=0;credit(p,3000);}else{p.lossStreak=Math.min(3,(p.lossStreak||0)+1);credit(p,[0,1900,2400,2900][p.lossStreak]);}}this.score[team-1]++;this.winnerTeam=team;this.phase=this.score[team-1]>=13?'finished':'end';this.time=this.phase==='finished'?10:6;this.result=reason;this.progress=0;this.actor=null;for(const p of this.actors()){p.isShooting=false;p._spikeUse=false;}}
+  finish(team,reason,allowPrep=false){if(!['live','planted'].includes(this.phase)&&!(allowPrep&&this.phase==='prep'))return;for(const p of this.actors()){if(this.team(p)===team){p.lossStreak=0;credit(p,3000);}else{p.lossStreak=Math.min(3,(p.lossStreak||0)+1);credit(p,[0,1900,2400,2900][p.lossStreak]);}}this.score[team-1]++;this.winnerTeam=team;this.phase=this.score[team-1]>=13?'finished':'end';this.time=this.phase==='finished'?10:6;this.result=reason;this.progress=0;this.actor=null;for(const p of this.actors()){p.isShooting=false;p._spikeUse=false;}}
   tick(dt){
    dt=Math.max(0,Math.min(.1,dt));this.time-=dt;
    for(const p of this.actors())if(alive(p)&&p.shieldType==='regen'){p._shieldDelay=Math.max(0,(p._shieldDelay||0)-dt);if(p._shieldDelay===0){const n=Math.min(25-(p.shield||0),p.shieldPool||0,25*dt);p.shield+=n;p.shieldPool-=n;}}

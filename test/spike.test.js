@@ -464,3 +464,11 @@ test('host cheats reject guests, apply only locally and reset on leaving match',
 test('host invulnerability blocks real bullet HP and shield damage',()=>{
  const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;isHost=true;isSpawnSelecting=false;isSpectating=false;obstacles=[];updateAI=()=>{};updateNetwork=()=>{};hasLineOfSight=()=>true;myPlayer.id='me';myPlayer.teamId='team_1';myPlayer.x=175;myPlayer.y=100;myPlayer.hp=100;myPlayer.isDead=false;myPlayer.isShooting=false;myPlayer.shieldType='heavy';myPlayer.shield=50;spikeState={phase:'live'};remotePlayers.enemy={id:'enemy',x:100,y:100,angle:0,hp:100,isDead:false,teamId:'team_2',weapon:'v_operator',clipAmmo:5};HostCheats.act('invincible');shoot(remotePlayers.enemy,0);originalUpdate();`);assert.equal(h.run('myPlayer.hp'),100);assert.equal(h.run('myPlayer.shield'),50);
 });
+test('round end cheats are host-only, award selected side once and advance normally',()=>{
+ for(const phase of ['prep','live','planted'])for(const action of ['endAttack','endDefense']){
+ const h=harness();h.run(`selectedMode='spike';gameStarted=true;gameEnded=false;myPlayer.id='host';myPlayer.teamId='team_1';remotePlayers.guest={...myPlayer,id:'guest',teamId:'team_2'};spikeMatch=new SpikeRules.Match(spikeActors);spikeMatch.phase='${phase}';spikeMatch.attackTeam=2;spikeState=spikeMatch.snapshot();isHost=false;`);
+ assert.equal(h.run(`HostCheats.act('${action}')`),false);h.run('isHost=true;bullets.push({});spikeHeld=true');assert.equal(h.run(`HostCheats.act('${action}')`),true);
+ const winner=action==='endAttack'?2:1;assert.equal(h.run('spikeMatch.winnerTeam'),winner);assert.equal(h.run(`spikeMatch.score[${winner-1}]`),1);assert.equal(h.run('bullets.length'),0);assert.equal(h.run(`HostCheats.act('${action}')`),false);
+ h.run('for(let i=0;i<61;i++)spikeMatch.tick(.1)');assert.equal(h.run('spikeMatch.round'),2);assert.equal(h.run('spikeMatch.phase'),'prep');
+ }
+});
